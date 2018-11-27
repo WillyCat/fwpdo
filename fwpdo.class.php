@@ -1,13 +1,31 @@
 <?php
 /*
-Date        Ver  Who  Change
-----------  ---  ---  -----------------------------------------------------
-            1.0  FHO  Class isolated from existing project
-2015-08-14  1.1  FHO  camelCase
-2016-05-30  1.2  FHO  added some prototyping
-                      added recording functions
-                      added transactionCount to avoid subtransactions (mySql does not support subtransactions
-                      BEGIN TRANS inside a transaction will commit current one and start a new one)
+Date        Ver   Who  Change
+----------  ----- ---  -----------------------------------------------------
+            1.0   FHO  Class isolated from existing project
+2015-08-14  1.1   FHO  camelCase
+2016-05-30  1.2   FHO  added some prototyping
+                       added recording functions
+                       added transactionCount to avoid subtransactions (mySql does not support subtransactions
+                       BEGIN TRANS inside a transaction will commit current one and start a new one)
+            1.3   FHO  mssql, pgsql
+            1.4   FHO  amelioration de la compatibilite ascendante
+                       __construct: support des anciens formats a 8 parametres
+                       fwpdo::setwarnchannel()
+2018-10-07  1.5   FHO  getHost(), get_host(), getAttribute()
+2018-10-10  1.6   FHO  - select1()
+                       - remonte une erreur si 'from' est vide
+2018-10-18  1.7   FHO  - update accepte 'join'
+2018-11-06  1.7.1 FHO  - improved an error message
+
+Known issues
+--------------
+1- si une table ne possede pas de PK AUTOINC, alors on ne peut pas recuperer d'insert id apres l'insertion
+   actuellement, cela leve une exception meme si l'insertion s'est deroule avec succes
+
+added basic support for pgsql, mssql
+added limit for update
+
 */
 
 // Database connexion pool
@@ -16,6 +34,8 @@ Date        Ver  Who  Change
 // $dbo = dbCnxPool::getPDO([ 'dsn' => 'mysql:dbname=mdb;host=localhost', 'username' => 'dbuser', 'passwd' => 'dbpassword' ]);
 // at first call, will create a PDO object
 // subsequent calls for same 'database' value will return previously created object
+
+require_once 'errorHandler.class.php';
 
 class dbCnxPool
 {
@@ -47,17 +67,64 @@ class dbCnxPool
 			self::$dbLinks = array();
 		}
 
+// print_r ($args);
+		//-------------
+		// Get engine
+		//-------------
+		if (!array_key_exists ('engine', $args))
+			throw new Exception ('engine is mandatory');
+		$engine = $args['engine'];
+		if (!in_array ($engine, [ 'mysql', 'pgsql', 'mssql' ] ))
+			throw new Exception ('engine not supported: [' . $engine . ']');
+
+		// mssql is an alias for dblib
+		if ($engine == 'mssql')
+			$engine = 'dblib';
+
 		// search for this database
-		if (isset (self::$dbLinks[$args['database']]))
+		$database = $args['database'];
+		if (isset (self::$dbLinks[$database]))
 			return self::$dbLinks[$args['database']]['pdo'];
+
+		$dsnItems = [ ];
+
+		if (!($engine == 'dblib' && $args['database'] == '<default>'))
+			$dsnItems['dbname'] = $args['database'];
+
+		$dsnItems['host'] = $args['host'];
+
+		if (isset ($args['socket']))
+			$dsnItems['unix_socket'] = $args['socket'];
+
+		if (isset ($args['port']))
+			$dsnItems['port'] = $args['port'];
+
+		$dsnparts = [ ];
+		foreach ($dsnItems as $name => $value)
+			$dsnparts[] = $name . '=' . $value;
+
+		$dsn = $engine . ':' . implode (';', $dsnparts);
+// echo 'DSN: ' . $dsn . "\n";
 
 		try
 		{
-			if (isset ($args['dsn']) )
-				$dsn = $args['dsn'];
-			else
-				$dsn = $args['engine'].':dbname='.$args['database'].";host=".$args['host'];
-			$pdo = new PDO( $dsn, $args['username'], $args['passwd']);
+			switch ($engine)
+			{
+			case 'mysql' :
+				$pdo = new PDO( $dsn, $args['username'], $args['passwd']);
+				break;
+			case 'pgsql' :
+				$dsn .= ';user=' . $args['username'];
+				$dsn .= ';password=' . $args['passwd'];
+				$dsn .= ';port=' . 5432;
+				$pdo = new PDO($dsn);
+				break;
+			case 'dblib' :
+				$pdo = new PDO( $dsn, $args['username'], $args['passwd']);
+				break;
+			default :
+				throw new Exception ('engine not implemented: ' . $engine);
+			}
 		}
 		catch (PDOException $e)
 		{
@@ -121,6 +188,7 @@ class fwpdo
 
 	private $onerror;
 
+	private $host;
 	private $database;
 	private $transactionCount;
 
@@ -142,14 +210,34 @@ class fwpdo
 	private $recording;
 	private $sqls;
 
-	//__construct($host, $username, $passwd, $database)
+	private $engine;
+
+	// old syntax: 4 to 8 parms
+	// __construct($host, $username, $passwd, $database [,$engine[,$port [,$warn_channel [,$socket]]]])
+	// new syntax: 1 array
+	// __construct([
+	// 'host' =>
+	// 'username' => 
+	// 'passwd' =>
+	// 'database' => mandatory if db is mysql, fac for mssql, pgsql
+	// 'socket' => (fac)
+	// 'port' => (fac)
+	// 'engine' => 'mysql' (default) | 'pgsql' | 'mssql'
+	// 'onoerror' =>  'raise' | 'die' (default) | 'return'
+	//                'exist' alias de 'die'
+	// 'warn_channel' => unused, for compatibility
+	// ])
 	public function
 	__construct()
 	{
 		switch (func_num_args())
 		{
 		case 4 : // f($host, $username, $passwd, $database)
-			$args = self::buildArgsForOldSyntax(func_get_args(),['host','username', 'passwd', 'database' ] );
+		case 5 : // f($host, $username, $passwd, $database, $engine)
+		case 6 : // f($host, $username, $passwd, $database, $engine, $port)
+		case 7 : // f($host, $username, $passwd, $database, $engine, $port, $warn_channel)
+		case 8 : // f($host, $username, $passwd, $database, $engine, $port, $warn_channel, $socket)
+			$args = self::buildArgsForOldSyntax(func_get_args(),['host','username', 'passwd', 'database', 'engine', 'port', 'warn_channel', 'socket' ] );
 			break;
 
 		case 1 : // f([])
@@ -160,6 +248,9 @@ class fwpdo
 				return $this -> errorHandler('Syntax error');
 			}
 			break;
+
+		default :
+			throw new Exception ('fwpdo::construct : unexpected args count: ' . func_num_args() );
 		}
 
 		$this -> recording = false;
@@ -167,12 +258,35 @@ class fwpdo
 
 		// set default values for unset parms
 		$args = self::addMissing($args, [ 'engine' ], 'mysql' );
+		if ($args['engine'] == '')
+			$args['engine'] = 'mysql';
+		$this -> engine = $args['engine'];
+
 		$args = self::addMissing($args, [ 'onerror' ], 'die' );
 
 		// switch to user requested error handler
 		$this -> setTemporaryHandler($args['onerror']);
 
-		$this -> database = $args['database'];
+		if (array_key_exists ('database', $args) && $args['database'] != '')
+			$this -> database = $args['database'];
+		else
+			switch ($this->engine)
+			{
+			case 'mssql' :
+				// une db par defaut est associee a la connexion au niveau de la conf serveur
+				// on peut ne pas en definir ici, on a alors cette base par defaut
+				// (mais on ignore laquelle)
+				$this -> database = $args['database'] = '<default>';	// default database
+				break;
+			case 'pgsql' :
+				// par defaut, la base est 'postgres'
+				$this -> database = $args['database'] = 'postgres';
+				break;
+			case 'mysql' :
+				throw new Exception ('missing database');
+			}
+
+		$this -> host = $args['host'];
 		$this -> pdo = dbCnxPool::getPDO($args);
 
 		// this is likely no transaction has been started
@@ -247,7 +361,17 @@ class fwpdo
 	private function
 	formatFieldName (string $fieldName): string
 	{
-		return '`' . $fieldName . '`';
+		switch ($this -> engine)
+		{
+		case 'mysql' :
+			return '`' . $fieldName . '`';
+
+		case 'pgsql' :
+			return $fieldName;
+
+		case 'mssql' :
+			return '[' . $fieldName . ']';
+		}
 	}
 
 	//==================================================
@@ -264,6 +388,21 @@ class fwpdo
 	getDatabase(): string
 	{
 		return $this -> database;
+	}
+
+	public function
+	getHost(): string
+	{
+		return $this -> host;
+	}
+
+	// for compatibility
+	public function get_host() { return $this -> getHost(); }
+
+	public function
+	getAttribute (int $attribute)
+	{
+		return $this -> pdo -> getAttribute($attribute);
 	}
 
 	/**
@@ -320,6 +459,7 @@ class fwpdo
 
 			$arr = array($parm);
 		}
+//print_r ($parm);
 
 		$sql = '';
 		foreach ($arr as $col=>$item)
@@ -427,7 +567,7 @@ return;
 	//             'return' -> return false
 	//             'raise','exception' -> raise an exception
 	//             'user' -> call function defined by setHandler() and return its return value
-	// forceExec: if true executes statement, overrinding read-only mode
+	// forceExec: if true executes statement, overriding read-only mode
 	private function
 	executeSql (string $sql, string $onerror = '', bool $forceExec = false)
 	{
@@ -499,6 +639,24 @@ return;
 		return $this -> errorHandler ($this->msg);
 	}
 
+	private function
+	buildArgsForOldSyntax (array $oldArgs, array $parms): array
+	{
+		$num_args = count ($oldArgs);
+		if ($num_args > count ($oldArgs))
+			return $this -> errorHandler ('too many parameters', 1);
+
+		$newArgs = array();
+		$argi = 0;
+		foreach ($parms as $parm)
+			if ($argi < $num_args)
+				$newArgs[$parm] = $oldArgs[$argi++];
+			else
+				$newArgs[$parm] = '';
+
+		return $newArgs;
+	}
+
 	//--------------------------------------------------------------------
 	//                            COUNT
 	//--------------------------------------------------------------------
@@ -554,22 +712,15 @@ return;
 		return $this -> buildArgsForOldSyntax ($oldArgs, $parms);
 	}
 
-	private function
-	buildArgsForOldSyntax ($oldArgs, $parms): array
+	public function
+	select1 (array $pdoparms): ?array
 	{
-		$num_args = count ($oldArgs);
-		if ($num_args > count ($oldArgs))
-			return $this -> errorHandler ('too many parameters', 1);
-
-		$newArgs = array();
-		$argi = 0;
-		foreach ($parms as $parm)
-			if ($argi < $num_args)
-				$newArgs[$parm] = $oldArgs[$argi++];
-			else
-				$newArgs[$parm] = '';
-
-		return $newArgs;
+		$rows = $this -> select ($pdoparms);
+		if ($this -> num_rows () == 0)
+			return null;
+		if ($this -> num_rows() > 1)
+			throw new Exception ('select1: mutiple results');
+		return $rows[0];
 	}
 
 	public function
@@ -607,7 +758,10 @@ return;
 	public function
 	select_sql (string $sql): array
 	{
-		return $this -> fetch ($sql);
+		$result = $this -> fetch ($sql);
+		if (is_array($result))
+			return $result;
+		throw new Exception ('fwpdo::select_sql failed for ' . $sql . ': ' . $this->shortmsg);
 	}
 
 	// for compatibility only
@@ -653,7 +807,7 @@ return;
 		$groupByStatement = $this -> buildGroupByStatement ($args['groupby']);
 		$orderByStatement = $this -> buildOrderByStatement($args['orderby']);
 		$orderStatement   = $this -> buildOrderStatement($args['order']);
-		$limitStatement   = $this -> buildLimitStatement ($args['limit']);
+		$limitStatement   = $this -> buildLimitStatement ($args['limit'], 2);
 
 		//---------------------------------
 		// check mandatory ones
@@ -726,6 +880,9 @@ return;
 		else
 			$tables = $tablesParm;
 
+		if ($tables == '')
+			throw new Exception ('No table provided');
+
 //echo '['.$tables.']';
 		return $tables;
 	}
@@ -794,11 +951,21 @@ return;
 		return $groupByStatement;
 	}
 
+	// buildLimitStatement('10') => 'LIMIT 10' (max 10 records)
+	// buildLimitStatement('50,10') => 'LIMIT 50,10' (max 10 records, starting at 50th)
+	// buildLimitStatement('limit 10') => 'LIMIT 10'
+	// buildLimitStatement('limit 50,10') => 'LIMIT 50,10'
+	// buildLimitStatement([ 10 ]) => 'LIMIT 10'
+	// buildLimitStatement([ 50, 10 ]) => 'LIMIT 50,10'
 	private function
-	buildLimitStatement ($limitParm): string
+	buildLimitStatement ($limitParm, int $maxParts): string
 	{
 		if (is_array ($limitParm))
-			$limitStatement = ' LIMIT ' . $limitParm[0] . ',' . $limitParm[1];
+		{
+			$limitStatement = ' LIMIT ' . $limitParm[0];
+			if (count($limitParm) > 1 && $maxParts == 2)
+				$limitStatement .= ',' . $limitParm[1];
+		}
 		else
 		{
 			$limitParm = trim($limitParm);
@@ -872,7 +1039,7 @@ return;
 	{
 		$fromStatement    = $this -> buildFromStatement ($args['from']);
 		$whereStatement = $this -> buildWhereStatement ($args['where']);
-		$limitStatement  = $this -> buildLimitStatement ($args['limit']);
+		$limitStatement  = $this -> buildLimitStatement ($args['limit'], 1);
 
 		$sql = $this -> concatStrings ( 'DELETE', $fromStatement, $whereStatement , $limitStatement );
 
@@ -922,6 +1089,17 @@ return;
 	//                            TRANSACTIONS
 	//--------------------------------------------------------------------
 
+	// the class will prevent from using nested transactions
+	// with a transaction count
+	// beginTransaction increases transaction count
+	// commit and rollback decreases the count
+	// real beginTransaction / commit / rollback orders 
+	// are only sent for outmost transaction,
+	// i.e. when transaction count moves from 0 to 1 for START
+	// and 1 to 0 for commit/rollback
+
+	// in read-only mode, transactions are meaningless and not issued
+
 	// for debug purposes
 	public function
 	getTransactionCount (): int
@@ -930,7 +1108,7 @@ return;
 	}
 
 	public function
-	beginTransaction()
+	beginTransaction(): void
 	{
 		if ($this -> readOnly)
 			return;
@@ -950,7 +1128,7 @@ return;
 	public function
 	commit(): bool
 	{
-tracelog ('[fwpdo::commit] commit - transactionCount='.$this->transactionCount);
+//tracelog ('[fwpdo::commit] commit - transactionCount='.$this->transactionCount);
 		if ($this -> readOnly)
 			return true;
 
@@ -967,7 +1145,7 @@ tracelog ('[fwpdo::commit] commit - transactionCount='.$this->transactionCount);
 			{
 				if (!$this -> pdo -> commit())
 					return false;
-tracelog ('[fwpdo::commit] commit successful');
+//tracelog ('[fwpdo::commit] commit successful');
 			}
 			catch (PDOException $e)
 			{
@@ -1029,7 +1207,7 @@ tracelog ('[fwpdo::commit] commit successful');
 	public function
 	update ()
 	{
-		$parms = [ 'from', 'fields', 'where', 'trimall', 'onerror' ];
+		$parms = [ 'from', 'fields', 'where', 'trimall', 'onerror', 'limit', 'join' ];
 
 		$num_args = func_num_args();
 
@@ -1051,7 +1229,7 @@ tracelog ('[fwpdo::commit] commit successful');
 	}
 
 	public function
-	must_update ($table, $fields, $whereset, $trimall=false)
+	must_update (string $table, array $fields, $whereset, bool $trimall=false)
 	{
 		return $this -> update ($table, $fields, $whereset, $trimall, 'die');
 	}
@@ -1082,20 +1260,24 @@ tracelog ('[fwpdo::commit] commit successful');
 	 * @return string SQL statement
 	 */
 	private function
-	buildUpdateRequest ($args): string
+	buildUpdateRequest (array $args): string
 	{
 		// Create missing entries, if any
 
 		$tables  = $this -> buildTablesList ($args['from']);
 		$whereStatement = $this -> buildWhereStatement ($args['where']);
 		$setStatement   = $this -> buildSetStatement ($args['fields'], $args['trimall']);
+		$limitStatement   = $this -> buildLimitStatement ($args['limit'], 1);
+		$joinStatements   = $this -> buildJoinStatements ($args['join']);
 
 		$sql = $this -> concatStrings ( 
 			'UPDATE',
 			$tables,
+			$joinStatements,
 			'SET',
 			$setStatement,
-			$whereStatement
+			$whereStatement,
+			$limitStatement
 			 );
 		return $sql;
 	}
@@ -1310,10 +1492,20 @@ tracelog ('[fwpdo::commit] commit successful');
 	public function on_error ($expected_behaviour) { return $this -> onError($expected_behaviour); }
 	public function get_last_error () { return $this -> getLastError(); }
 	//public function datetime () { return $this -> dateTime(); }
-	public function get_database () { return $this -> get_database(); }
+	public function get_database () { return $this -> getDatabase(); }
 	public function num_rows () { return $this -> numRows(); }
 	public function set_charset ($charset) { return $this -> setCharset($charset); }
 	public function must_delete ($table, $whereset) { return $this -> deleteOrDie($table, $whereset); }
 	public function delete_sql ($sql, $onerror = '') { return $this -> deleteSql ($sql, $onerror); }
+	public function setwarnchannel($channel) { }
+
+	public function
+	sql_build_select ($selectarr, $fromarr, $wherearr, $orderarr, $limitstr,$joinarr, $sortorder, $grouparr, $havingarr)
+	{
+		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'group', 'having' ];
+		$newArgs = $this -> buildArgsForOldSyntax (func_get_args(), $parms);
+		$sql = $this -> buildSelectRequest ($newArgs);
+		return $sql;
+	}
 }
 ?>
