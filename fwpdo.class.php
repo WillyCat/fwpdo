@@ -22,6 +22,8 @@ Date        Ver   Who  Change
                        - refactoring of buildLimitStatement(), can now paginate MSSQL and PGSQL
                        - added missing protos
 2018-12-14  1.8.1 FHO  bugfix: 'group' -> 'groupby'
+2018-12-14  1.9   FHO  - select() now accepts a string with SQL request: select('SELECT...')
+                       - new: describe()
 
 Known issues
 --------------
@@ -737,6 +739,41 @@ return;
 	}
 
 	//--------------------------------------------------------------------
+	//                         DESCRIBE / SHOW COLUMNS
+	//--------------------------------------------------------------------
+
+	// describe ('table')
+	// describe ([ 'from' => 'table', 'where' => [ ... ] );
+	public function
+	describe ()
+	{
+		$num_args = func_num_args();
+
+		if ($num_args  != 1)
+			return $this -> errorHandler ('fwpdo::describe() expects 1 parameter', 1);
+
+		$args = func_get_arg(0);
+		if (!is_array( $args ))
+			$args = [ 'from' => $args ];
+		$args = $this -> addMissing ($args, [ 'where' ], '' );
+		$args = $this -> addMissing ($args, [ 'boolop' ], 'AND' );
+
+		if (!array_key_exists ('from', $args) || $args['from'] == '')
+			return $this -> errorHandler ('fwpdo::describe() missing table', 1);
+
+		$whereStatement   = $this -> buildWhereStatement ($args['where'], $args['boolop']);
+		$fromStatement    = $args['from'];
+		$sql = $this -> concatStrings(  'SHOW COLUMNS FROM', $fromStatement, $whereStatement );
+
+		if ($sql == '')
+			return $this -> errorHandler ('fwpdo::describe() unable to build SQL statement', 1);
+
+		$rows = $this->fetch ($sql);
+
+		return $rows;
+	}
+
+	//--------------------------------------------------------------------
 	//                            SELECT
 	//--------------------------------------------------------------------
 
@@ -759,6 +796,14 @@ return;
 		return $rows[0];
 	}
 
+	// select() accepts various syntaxes and argument types
+	// 1- an array
+	// select( [ 'select' => '*', 'from' => 'table', 'where' => ['field'=>1] ] )
+	// 2- a string
+	// select ('SELECT * FROM table WHERE field=1')
+	// 3- a list of arguments (deprecated)
+	// select ('*', 'table', [ 'field' => 1 ]);
+
 	public function
 	select ()
 	{
@@ -770,20 +815,19 @@ return;
 		if ($num_args  == 1)	// new syntax
 		{
 			$args = func_get_arg(0);
-			if (!is_array( $args ))
-				return $this -> errorHandler ('fwpdo::select() expects an array', 1);
+			if (is_array( $args ))
+				$sql = $this -> buildSelectRequest($args);
+			else
+				$sql = $args;
 		}
 		else // old syntax
 		{
-//tracelog ('[select] 1 ' . tracelog_dump(func_get_args()) );
 			$args = $this -> buildArgsForOldSelectSyntax(func_get_args() );
 			if ($args == '')
 				return $this -> errorHandler ('fwpdo::select() bad parameters', 1);
+			$sql = $this -> buildSelectRequest($args);
 		}
 
-//tracelog ('[select] 2 ' . tracelog_dump($args) );
-		$sql = $this -> buildSelectRequest($args);
-// echo ('[select] 1 ' . $sql . "\n" );
 		if ($sql == '')
 			return '';
 
