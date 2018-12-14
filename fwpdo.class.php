@@ -17,6 +17,10 @@ Date        Ver   Who  Change
                        - remonte une erreur si 'from' est vide
 2018-10-18  1.7   FHO  - update accepte 'join'
 2018-11-06  1.7.1 FHO  - improved an error message
+2018-11-29  1.8   FHO  - setCharset(): utf-8 changed to utf8 (mysql)
+                       - getCharset(), getCollation()
+                       - refactoring of buildLimitStatement(), can now paginate MSSQL and PGSQL
+                       - added missing protos
 
 Known issues
 --------------
@@ -35,7 +39,7 @@ added limit for update
 // at first call, will create a PDO object
 // subsequent calls for same 'database' value will return previously created object
 
-require_once 'errorHandler.class.php';
+require_once 'errorhandler.class.php';
 
 class dbCnxPool
 {
@@ -61,7 +65,8 @@ class dbCnxPool
 	* @return object PDO for this database or false if failed
 	*/
 	public static function
-	getPDO ($args) {
+	getPDO ($args): ?PDO
+	{
 		// 1st call: create connexion pool
 		if (is_null(self::$dbLinks)) {
 			self::$dbLinks = array();
@@ -130,7 +135,7 @@ class dbCnxPool
 		{
 			self::$errorCode = $e -> getCode();
 			self::$lastError = $e -> getMessage();
-			return false;
+			return null;
 		}
 		$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); // Set Errorhandling to Exception
 
@@ -223,7 +228,7 @@ class fwpdo
 	// 'socket' => (fac)
 	// 'port' => (fac)
 	// 'engine' => 'mysql' (default) | 'pgsql' | 'mssql'
-	// 'onoerror' =>  'raise' | 'die' (default) | 'return'
+	// 'onerror' =>  'raise' | 'die' (default) | 'return'
 	//                'exist' alias de 'die'
 	// 'warn_channel' => unused, for compatibility
 	// ])
@@ -265,7 +270,8 @@ class fwpdo
 		$args = self::addMissing($args, [ 'onerror' ], 'die' );
 
 		// switch to user requested error handler
-		$this -> setTemporaryHandler($args['onerror']);
+		$this -> setHandler($args['onerror']);
+		// $this -> setTemporaryHandler($args['onerror']);
 
 		if (array_key_exists ('database', $args) && $args['database'] != '')
 			$this -> database = $args['database'];
@@ -296,8 +302,10 @@ class fwpdo
 		// (it should be rollbacked)
 		$this -> transactionCount = 0;
 
-		if ($this -> pdo == '')
+		if ($this -> pdo == null)
+		{
 			return $this -> errorHandler(dbCnxPool::getLastError());
+		}
 
 		$this -> resetTemporaryHandler();
 	}
@@ -557,7 +565,34 @@ return;
 	public function
 	setCharset (string $charset)
 	{
+		// [1.8] mysql recognizes 'utf8', not 'utf-8'
+		$charset = strtolower ($charset);
+		if ($charset == 'utf-8')
+			$charset = 'utf8';
+
 		return $this -> executeSql ('SET NAMES ' . $charset);
+	}
+
+	/**
+	 * Returns charset of current database
+	 * @returns string charset
+	 */
+	public function
+	getCharset(): string
+	{
+		$row = $this -> select1 ([ 'select' => "@@character_set_database AS C", 'from' => null ]);
+		return (($row == null) ? '' : $row['C']);
+	}
+
+	/**
+	 * Returns collation of current database
+	 * @returns string collaction
+	 */
+	public function
+	getCollation(): string
+	{
+		$row = $this -> select1 ([ 'select' => "@@collation_database AS C", 'from' => null ]);
+		return (($row == null) ? '' : $row['C']);
 	}
 
 	// if success, returns true
@@ -747,7 +782,7 @@ return;
 
 //tracelog ('[select] 2 ' . tracelog_dump($args) );
 		$sql = $this -> buildSelectRequest($args);
-//tracelog ('[select] 1 ' . $sql );
+// echo ('[select] 1 ' . $sql . "\n" );
 		if ($sql == '')
 			return '';
 
@@ -788,10 +823,9 @@ return;
 	{
 		// Create missing entries, if any
 
-		if (!array_key_exists ('select', $args))
-			$args['select'] = '*';
-
-		$args = $this -> addMissing ($args, [ 'select', 'from', 'join', 'where', 'groupby', 'orderby', 'order', 'limit', 'having' ] );
+		$args = $this -> addMissing ($args, [ 'select' ], '*' );
+		$args = $this -> addMissing ($args, [ 'join', 'where', 'groupby', 'orderby', 'order', 'limit', 'having' ] );
+		$args = $this -> addMissing ($args, [ 'from' ], 'MISSING' );
 		$args = $this -> addMissing ($args, [ 'boolop' ], 'AND' );
 //tracelog ('[buildSelectRequest] ' . tracelog_dump($args));
 
@@ -800,7 +834,17 @@ return;
 		//---------------------------------
 
 		$selectStatement  = $this -> buildSelectStatement ($args['select']);
-		$fromStatement    = $this -> buildFromStatement ($args['from']);
+		// not all select requests have a FROM statement
+		// for instance, SELECT COLLATION('foo') has no FROM
+		// to distinguish lack of FROM from an error,
+		// it is required that requests with no FROM set the parm to NULL
+		// otherwise, an exception (missing from) will be raised
+		if ($args['from'] == 'MISSING')
+			return $this -> errorHandler ('fwpdo::select() Missing FROM');
+		if ($args['from'] == null) // legal no 'from'
+			$fromStatement    = '';
+		else	// non-empty 'from' MUST be provided
+			$fromStatement    = $this -> buildFromStatement ($args['from']);
 		$joinStatements   = $this -> buildJoinStatements ($args['join']);
 		$whereStatement   = $this -> buildWhereStatement ($args['where'], $args['boolop']);
 		$havingStatement  = $this -> buildHavingStatement ($args['having']);
@@ -813,8 +857,9 @@ return;
 		// check mandatory ones
 		//---------------------------------
 
-		if ($fromStatement == '')
-			return $this -> errorHandler ('fwpdo::select() Empty FROM', 1);
+		// if ($fromStatement == '')
+			// return $this -> errorHandler ('fwpdo::select() Empty FROM', 1);
+
 		if ($selectStatement == '')
 			return $this -> errorHandler ('fwpdo::select() Empty SELECT', 1);
 
@@ -951,34 +996,86 @@ return;
 		return $groupByStatement;
 	}
 
-	// buildLimitStatement('10') => 'LIMIT 10' (max 10 records)
-	// buildLimitStatement('50,10') => 'LIMIT 50,10' (max 10 records, starting at 50th)
-	// buildLimitStatement('limit 10') => 'LIMIT 10'
-	// buildLimitStatement('limit 50,10') => 'LIMIT 50,10'
-	// buildLimitStatement([ 10 ]) => 'LIMIT 10'
-	// buildLimitStatement([ 50, 10 ]) => 'LIMIT 50,10'
+	// 1- max 10 records
+	// > buildLimitStatement('10')
+	// > buildLimitStatement('limit 10')
+	// > buildLimitStatement([ 10 ])
+	// mysql => 'LIMIT 10'
+	// mssql => 'FETCH NEXT 10 ROWS ONLY'
+	// pgsql => 'FETCH NEXT 10 ROWS ONLY'
+	//
+	// 2- max 10 records, starting at 50th
+	// > buildLimitStatement('50,10')
+	// > buildLimitStatement('limit 50,10')
+	// > buildLimitStatement([ 50, 10 ])
+	// mysql => 'LIMIT 50,10' ou 'LIMIT 10 OFFSET 50'
+	// mssql => 'OFFSET 50 ROWS FETCH NEXT 10 ROWS ONLY'
+	// pgsql => 'OFFSET 50 FETCH NEXT 10 ROWS ONLY'
+
 	private function
 	buildLimitStatement ($limitParm, int $maxParts): string
 	{
-		if (is_array ($limitParm))
+		if (!is_array ($limitParm))
 		{
-			$limitStatement = ' LIMIT ' . $limitParm[0];
-			if (count($limitParm) > 1 && $maxParts == 2)
-				$limitStatement .= ',' . $limitParm[1];
+			$limitParm = strtoupper ($limitParm);
+			$limitParm = str_replace ('LIMIT', '', $limitParm);
+			$limitParm = str_replace (' ', '', $limitParm);
+
+			$limitParm = explode (',' , $limitParm);
 		}
+
+		if ($maxParts == 2 && count($limitParm) == 2)	// offset,max
+		{
+			$offset  = (int)$limitParm[0];
+			$maxrows = (int)$limitParm[1];
+		}
+		else	// max
+		{
+			$offset  = 0;
+			$maxrows = (int)$limitParm[0];
+		}
+
+		if ($maxrows == 0)
+			return '';
+
+		switch ($this -> engine)
+		{
+		case 'mysql' : return $this->buildLimitStatementForMysql($offset, $maxrows);
+		case 'pgsql' : return $this->buildLimitStatementForPgsql($offset, $maxrows);
+		case 'mssql' : return $this->buildLimitStatementForMSSql($offset, $maxrows);
+		}
+	}
+
+	// NB: works with SQL Server 2012 and beyond
+	// NB: requires ORDER BY clause
+	private function
+	buildLimitStatementForMSSql(int $offset, int $maxrows): string
+	{
+		$limitStatement .= 'OFFSET ' . $offset . ' ROWS';
+		$limitStatement .= ' ';
+		$limitStatement .= 'FETCH NEXT ' . $maxrows . ' ROWS ONLY';
+
+		return $limitStatement;
+	}
+
+	private function
+	buildLimitStatementForPgsql(int $offset, int $maxrows): string
+	{
+		$limitStatement .= 'OFFSET ' . $offset;
+		$limitStatement .= ' ';
+		$limitStatement .= 'FETCH NEXT ' . $maxrows . ' ROWS ONLY';
+
+		return $limitStatement;
+	}
+
+	private function
+	buildLimitStatementForMysql(int $offset, int $maxrows): string
+	{
+		if ($offset == 0)
+			$limitStatement = ' LIMIT ' . $maxrows;
 		else
-		{
-			$limitParm = trim($limitParm);
-			if ($limitParm == '')
-				$limitStatement = '';
-			else
-			{
-				$limitStatement = '';
-				if (strtolower (substr ($limitParm, 0, 5)) != 'limit')
-					$limitStatement .= 'LIMIT ';
-				$limitStatement .= $limitParm;
-			}
-		}
+			$limitStatement = ' LIMIT ' . $offset . ',' . $maxrows;
+
 		return $limitStatement;
 	}
 
@@ -1051,7 +1148,7 @@ return;
 	//--------------------------------------------------------------------
 
 	public function
-	setReadOnly (bool $truefalse = true)
+	setReadOnly (bool $truefalse = true): void
 	{
 		$this -> readOnly = $truefalse;
 	}
@@ -1061,14 +1158,14 @@ return;
 	//--------------------------------------------------------------------
 
 	public function
-	setRecording (bool $truefalse = true)
+	setRecording (bool $truefalse = true): void
 	{
 		$this -> recording = true;
 		$this -> resetRecorder();
 	}
 
 	public function
-	doRecord (string $sql)
+	doRecord (string $sql): void
 	{
 		$this -> sqls[] = $sql;
 	}
@@ -1080,7 +1177,7 @@ return;
 	}
 
 	private function
-	resetRecorder ()
+	resetRecorder (): void
 	{
 		$this -> sqls = array();
 	}
@@ -1305,7 +1402,7 @@ return;
 	 * @return int ID of inserted element, 0 if failed
 	 */
 	public function
-	insert ()
+	insert (): int
 	{
 		$num_args = func_num_args();
 
@@ -1324,7 +1421,7 @@ return;
 	}
 
 	private function
-	buildArgsForOldInsertSyntax ($args)
+	buildArgsForOldInsertSyntax (array $args): array
 	{
 		$parms = array();
 		$parms[] = 'from';
@@ -1430,7 +1527,8 @@ return;
 			return ($s ? 'TRUE' : 'FALSE');
 
 		default: 
-			tracelog ('quote(): parm is expected as string, '.gettype($s).' provided: '.tracelog_dump($s));
+			//tracelog ('quote(): parm is expected as string, '.gettype($s).' provided: '.tracelog_dump($s));
+			return $s;
 		}
 	}
 
