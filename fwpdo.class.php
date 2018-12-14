@@ -21,6 +21,7 @@ Date        Ver   Who  Change
                        - getCharset(), getCollation()
                        - refactoring of buildLimitStatement(), can now paginate MSSQL and PGSQL
                        - added missing protos
+2018-12-14  1.8.1 FHO  bugfix: 'group' -> 'groupby'
 
 Known issues
 --------------
@@ -743,7 +744,7 @@ return;
 	private function
 	buildArgsForOldSelectSyntax ($oldArgs): array
 	{
-		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'group', 'onerror' ];
+		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'groupby', 'onerror' ];
 		return $this -> buildArgsForOldSyntax ($oldArgs, $parms);
 	}
 
@@ -1600,7 +1601,7 @@ return;
 	public function
 	sql_build_select ($selectarr, $fromarr, $wherearr, $orderarr, $limitstr,$joinarr, $sortorder, $grouparr, $havingarr)
 	{
-		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'group', 'having' ];
+		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'groupby', 'having' ];
 		$newArgs = $this -> buildArgsForOldSyntax (func_get_args(), $parms);
 		$sql = $this -> buildSelectRequest ($newArgs);
 		return $sql;
