@@ -24,7 +24,7 @@ Date        Ver   Who  Change
 2018-12-14  1.8.1 FHO  bugfix: 'group' -> 'groupby'
 2018-12-14  1.9   FHO  - select() now accepts a string with SQL request: select('SELECT...')
                        - new: describe()
-2018-12-28  1.10  FHO  bugfix: delete() returned true even when failed
+2018-12-28  1.10  FHO  new: delete1() 
 
 Known issues
 --------------
