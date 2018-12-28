@@ -24,6 +24,7 @@ Date        Ver   Who  Change
 2018-12-14  1.8.1 FHO  bugfix: 'group' -> 'groupby'
 2018-12-14  1.9   FHO  - select() now accepts a string with SQL request: select('SELECT...')
                        - new: describe()
+2018-12-28  1.10  FHO  bugfix: delete() returned true even when failed
 
 Known issues
 --------------
@@ -1154,6 +1155,24 @@ return;
 		$cr = $this -> executeSql ($sql);
 		$this -> resetTemporaryHandler();
 		return $cr;
+	}
+
+	// note: this is a new function,
+	// it does not implements compatibility mode with multiple args
+	public function
+	delete1(array $args): bool
+	{
+		$opts = [  'from', 'where', 'onerror' ] ;
+		$args['limit'] = 1;
+		$args = $this -> addMissing ($args, $opts);
+
+		$this -> delete($args);
+		if ($this -> nrows != 1)
+		{
+			$this -> success = false;
+			return $this -> errorHandler('delete: no record found',1,$args['onerror']);
+		}
+		return true;
 	}
 
 	// shorthand
