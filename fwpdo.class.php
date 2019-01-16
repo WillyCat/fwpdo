@@ -24,7 +24,10 @@ Date        Ver   Who  Change
 2018-12-14  1.8.1 FHO  bugfix: 'group' -> 'groupby'
 2018-12-14  1.9   FHO  - select() now accepts a string with SQL request: select('SELECT...')
                        - new: describe()
-2018-12-28  1.10  FHO  new: delete1() 
+2018-12-28  1.10  FHO  bugfix: delete() returned true even when failed
+                       new: delete1()
+2019-01-07  1.11  FHO  fwpdo::fetch() uses fetchAll(), no longer iterates on fetch()
+                       added comments
 
 Known issues
 --------------
@@ -314,6 +317,12 @@ class fwpdo
 		$this -> resetTemporaryHandler();
 	}
 
+	static public function
+	getVersion(): string
+	{
+		return '1.11';
+	}
+
 	//==================================================
 	//
 	//             ERROR MANAGEMENT
@@ -454,7 +463,7 @@ class fwpdo
 	 * @param mixed parm WHERE or HAVING parm
 	 * @param string statement WHERE or HAVING
 	 * @boolop string AND|OR
-	 * @returns string sql statement
+	 * @return string sql statement
 	*/
 	private function
 	buildWhereOrHavingStatement ($parm, string $statement, $boolop): string
@@ -564,7 +573,7 @@ return;
 	/**
 	 * Sets DB engine charset
 	 * @param string name of charset
-	 * @returns bool true if success, false if failure
+	 * @return bool true if success, false if failure
 	 */
 	public function
 	setCharset (string $charset)
@@ -579,7 +588,7 @@ return;
 
 	/**
 	 * Returns charset of current database
-	 * @returns string charset
+	 * @return string charset
 	 */
 	public function
 	getCharset(): string
@@ -590,7 +599,7 @@ return;
 
 	/**
 	 * Returns collation of current database
-	 * @returns string collaction
+	 * @return string collaction
 	 */
 	public function
 	getCollation(): string
@@ -654,11 +663,14 @@ return;
 		try
 		{
 			$this -> success = false;
-			$st = $this->pdo->query($sql);
+			$st = $this->pdo->query($sql); // returns a PDOStatement
 			$this->nrows = $st -> rowCount();
 			$arr = array();
+/*
 			while (($row = $st -> fetch(PDO::FETCH_ASSOC)))
 				$arr[] = $row;
+*/
+$arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 			$this -> success = true;
 		}
 		catch (PDOException $e)
@@ -1130,9 +1142,24 @@ return;
 	//--------------------------------------------------------------------
 
 	/**
-	 * Issue a DELETE request
-	 * @param array parms (from, where, limit, onerror)
+	 * Issue a DELETE request (old syntax)
+	 * @param mixed $from
+	 * @param mixed $where
+	 * @param mixed $limit
+	 * @param mixed $onerror
 	 * @return bool true if success, calls errorhandler if fails
+	 */
+
+	/**
+	 * Issue a DELETE request (new syntax)
+	 * @param array $parms (from, where, limit, onerror)
+	 * @return bool true if success, calls errorhandler if fails
+	 *
+	 * caution: if no record is found (so no delete occurs),
+	 * the method will be considered as ok
+	 * It is the same as a SELECT reading no record
+	 * Only bad requests (missing table, column etc.) will be considered
+	 * as an error.
 	 */
 	public function
 	delete ()
@@ -1157,8 +1184,9 @@ return;
 		return $cr;
 	}
 
-	// note: this is a new function,
-	// it does not implements compatibility mode with multiple args
+	// this is a new function, it does not implements compatibility mode with multiple args
+	// if it cannot delete 1 record (no record matches where clause for example), it will return an error
+	// this differs from the behaviour of delete()
 	public function
 	delete1(array $args): bool
 	{
@@ -1182,7 +1210,9 @@ return;
 		$this -> delete ($table, $whereset, '', 'die');
 	}
 
-	// returns true if success, false if failure
+	/**
+	 * @return bool true if success, false if failure
+	 */
 	public function
 	deleteSql (array $sql, string $onerror = '')
 	{
@@ -1285,7 +1315,9 @@ return;
 	// alias
 	public function beginTrans() { return $this -> beginTransaction(); }
 
-	// returns true if ok, false if not
+	/**
+	 * @return bool true if ok, false if not
+	 */
 	public function
 	commit(): bool
 	{
@@ -1570,10 +1602,11 @@ return;
 	//
 	//==================================================
 
+	// if no INSERT has been performed, will return 0
 	public function
-	lastInsertId (): int
+	lastInsertId (string $name = null): int
 	{
-		return $this -> pdo -> lastInsertId ();
+		return $this -> pdo -> lastInsertId ($name);
 	}
 
 	public function
