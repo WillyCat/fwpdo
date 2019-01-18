@@ -28,6 +28,8 @@ Date        Ver   Who  Change
                        new: delete1()
 2019-01-07  1.11  FHO  fwpdo::fetch() uses fetchAll(), no longer iterates on fetch()
                        added comments
+2019-01-18  1.12  FHO  executeSql: was private, now public
+                       added comments
 
 Known issues
 --------------
@@ -55,22 +57,22 @@ class dbCnxPool
 	private static $errorCode;	// code
 
 	/**
-	* Constructeur de la classe
-	*
-	* @param void
-	* @return void
-	*/
+	 * Constructeur de la classe
+	 *
+	 * @param void
+	 * @return void
+	 */
 	private function
 	__construct() {  
 	}
 
 	/**
-	* getPDO
-	* Retrieve a PDO object for a given database
-	*
-	* @param array Connexion info (database, engine, host, dsn, username, passwd)
-	* @return object PDO for this database or false if failed
-	*/
+	 * getPDO
+	 * Retrieve a PDO object for a given database
+	 *
+	 * @param array Connexion info (database, engine, host, dsn, username, passwd)
+	 * @return object PDO for this database or false if failed
+	 */
 	public static function
 	getPDO ($args): ?PDO
 	{
@@ -232,8 +234,8 @@ class fwpdo
 	// 'username' => 
 	// 'passwd' =>
 	// 'database' => mandatory if db is mysql, fac for mssql, pgsql
-	// 'socket' => (fac)
-	// 'port' => (fac)
+	// 'socket' => (opt)
+	// 'port' => (opt)
 	// 'engine' => 'mysql' (default) | 'pgsql' | 'mssql'
 	// 'onerror' =>  'raise' | 'die' (default) | 'return'
 	//                'exist' alias de 'die'
@@ -320,7 +322,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.11';
+		return '1.12';
 	}
 
 	//==================================================
@@ -608,15 +610,23 @@ return;
 		return (($row == null) ? '' : $row['C']);
 	}
 
-	// if success, returns true
-	// if failure, behaviour depends on $onerror parm
-	//             if $onerror parm unset, then based on $this->onerror
-	//             'die' -> write a message on stdout and die
-	//             'return' -> return false
-	//             'raise','exception' -> raise an exception
-	//             'user' -> call function defined by setHandler() and return its return value
-	// forceExec: if true executes statement, overriding read-only mode
-	private function
+	/**
+	 * Execute any SQL statement
+	 *
+	 * @param string $sql SQL statement to execute
+	 * @param string $onerror (opt) expected behaviour on error
+	 *             if $onerror parm unset, then based on $this->onerror
+	 *             'die' -> write a message on stdout and die
+	 *             'return' -> return false
+	 *             'raise','exception' -> raise an exception
+	 *             'user' -> call function defined by setHandler() and return its return value
+	 * @param bool $forceExec (opt) Execute in read-only mode (default: do not execute)
+	 * @return string|bool if bool, true is succes, false is failure
+	 *                     if string, '' is success, else is error message
+	 *                     function code returns bool but also uses returns errorHandler that returns string
+	 * @todo fix inconsistencies in return type
+	 */
+	public function
 	executeSql (string $sql, string $onerror = '', bool $forceExec = false)
 	{
 		if ($this -> recording)
@@ -648,6 +658,7 @@ return;
 		}
 		else
 			$this -> doRecord ($sql);
+		return true;
 	}
 
 	private function
@@ -666,11 +677,12 @@ return;
 			$st = $this->pdo->query($sql); // returns a PDOStatement
 			$this->nrows = $st -> rowCount();
 			$arr = array();
+			// [ 1.11 ] remplaced loop on fetch() by fetchAll()
 /*
 			while (($row = $st -> fetch(PDO::FETCH_ASSOC)))
 				$arr[] = $row;
 */
-$arr = $st -> fetchAll(PDO::FETCH_ASSOC);
+			$arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 			$this -> success = true;
 		}
 		catch (PDOException $e)
@@ -810,11 +822,11 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 	}
 
 	// select() accepts various syntaxes and argument types
-	// 1- an array
+	// 1- an array (best choice)
 	// select( [ 'select' => '*', 'from' => 'table', 'where' => ['field'=>1] ] )
-	// 2- a string
+	// 2- a string (when option 1 is not an option)
 	// select ('SELECT * FROM table WHERE field=1')
-	// 3- a list of arguments (deprecated)
+	// 3- a list of arguments (for compatibility only, deprecated)
 	// select ('*', 'table', [ 'field' => 1 ]);
 
 	public function
@@ -1251,6 +1263,10 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 	//                      ENREGISTREMENT DES REQUETES
 	//--------------------------------------------------------------------
 
+	/**
+	 *  Start/Stop recording requests
+	 *  @param bool $truefalse start if true, stop if false
+	 */
 	public function
 	setRecording (bool $truefalse = true): void
 	{
@@ -1258,18 +1274,29 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 		$this -> resetRecorder();
 	}
 
+	/**
+	 *  Record a statement
+	 *  @param string $sql Statement to record
+	 */
 	public function
 	doRecord (string $sql): void
 	{
 		$this -> sqls[] = $sql;
 	}
 
+	/**
+	 *  Get recorded statements
+	 *  @return array Array of statements as strings
+	 */
 	public function
 	getRecorded(): array
 	{
 		return $this -> sqls;
 	}
 
+	/**
+	 *  Reset recording buffer
+	 */
 	private function
 	resetRecorder (): void
 	{
@@ -1298,6 +1325,13 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 		return $this -> transactionCount;
 	}
 
+	/**
+	 *  Start a transaction
+	 *  In readonly mode, will do nothing
+	 *  To avoid nesting of transactions, if a transaction in progress, beginTransaction() increments a count
+	 *  commit()/rollback() decrements the count
+	 *  and transaction is closed when count reaches 0  
+	 */
 	public function
 	beginTransaction(): void
 	{
@@ -1316,7 +1350,8 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 	public function beginTrans() { return $this -> beginTransaction(); }
 
 	/**
-	 * @return bool true if ok, false if not
+	 * Commit current transaction
+	 * @return bool true if ok, false if transaction caanot be committed or no transaction in progress
 	 */
 	public function
 	commit(): bool
@@ -1352,6 +1387,11 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 		return false;
 	}
 
+	/**
+	 *  Rollback current transaction
+	 *
+	 *  @return bool true if ok, false if transaction cannot be rollbacked or no transaction in progress
+	 */
 	public function
 	rollback(): bool
 	{
@@ -1491,11 +1531,24 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 	//--------------------------------------------------------------------
 
 	/**
-	 * Insert a single record
+	 * Insert a single record and return its ID
 	 * @param string $table Database table
 	 * @param array $fields Array of columns (name=>value)
 	 * @param boolean $trimall Trim before insert if true (default: no)
 	 * @return int ID of inserted element, 0 if failed
+	 * Note: not suitable for inserting more than 1 record
+	 * Note: not suitable when values are the result of a request
+	 * Example :
+	 * $id = $pdo -> insert ([
+	 * 'from' => $tableName, // mandatory
+	 * 'fields' => [ 'field1' => $value1, 'field2' => $value2 ] // mandatory
+	 * 'trimall' => true,	// optional - default is FALSE
+	 * 'onerror' => 'return' // optional - default is keep global behaviour as defined by setHandler()
+	 * ]);
+	 * if ($id == 0)
+	 *   echo $pdo -> getLastError();
+	 * else
+	 *   echo 'OK';
 	 */
 	public function
 	insert (): int
@@ -1527,6 +1580,9 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 		return $this -> buildArgsForOldSyntax($args, $parms);
 	}
 
+	/**
+	 * [DEPRECATED] Insert or die
+	 */
 	public function
 	must_insert (string $table, array $fields, bool $trimall=false)
 	{
@@ -1547,6 +1603,9 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 		return $this -> lastInsertId();
 	}
 
+	/**
+	 * [DEPRECATED] Insert or die
+	 */
 	public function
 	must_insert_sql (string $sql)
 	{
@@ -1602,13 +1661,22 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 	//
 	//==================================================
 
-	// if no INSERT has been performed, will return 0
+	/**
+	 * Return last inserted id
+	 * @param string $name (opt)
+	 * @return int ID or 0 if no INSERT performed
+	 */
 	public function
 	lastInsertId (string $name = null): int
 	{
 		return $this -> pdo -> lastInsertId ($name);
 	}
 
+	/**
+	 * Format a value according to its type
+	 * @param string|int|bool Value to format
+	 * @return string Valeur ready to be used in a statement
+	 */
 	public function
 	quote ($s): string
 	{
@@ -1635,6 +1703,13 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 	//
 	//==================================================
 
+	/**
+	 * Indicates if a string starts with a pattern
+	 * @parm string $str
+	 * @parm string $pattern
+	 * @parm bool (opt) $case_sentitive
+	 * @return bool true if string starts with pattern, false otherwise
+	 */
 	private function
 	startsWith (string $str, string $pattern, bool $case_sensitive = true): bool
 	{
@@ -1644,6 +1719,15 @@ $arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 			return ( strcasecmp (substr ($str, 0, strlen($pattern)) , $pattern ) == 0);
 	}
 
+	/**
+	 * Concatenates strings provided as string and/or array of strings
+	 * @return string concatenated string
+	 * Examples :
+	 * concatStrings('aa', 'bb') => 'aabb'
+	 * concatStrings('aa', 'bb', 'cc', 'dd') => 'aabbccdd'
+	 * concatStrings('aa', [ 'bb', 'cc' ], 'dd') => 'aabbccdd'
+	 * concatStrings( [ ] ) => ''
+	 */
 	// concatenate strings provided
 	// args can mix strings and arrays of strings
 	private function
