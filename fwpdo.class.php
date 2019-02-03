@@ -30,6 +30,24 @@ Date        Ver   Who  Change
                        added comments
 2019-01-18  1.12  FHO  executeSql: was private, now public
                        added comments
+2019-02-03  1.13  FHO  - buildSelectRequest now public
+                       - parameter $onerror is no longer used in any method
+                       for compatibility reasons, it is still accepted but ignored
+                       to set a handler, either
+                       1- do nothing
+                       fwpdo will raise an exception when error occurs
+                       2- set a permanent handler
+                       call $pdo->setHandler() to change fwpdo behaviour
+                       options are: die, return, raise
+                       'die' means call die()
+                       'return' means return a special value (like old fashioned functions)
+                       'raise' means trigger an exception
+                       3- set a temporary handler
+                       call $pdo->setTemporaryHandler()
+                       same options as setHandler()
+                       handler will override permanent handler but only for next error
+                       when error occurs, fwpdo will behave accordin to temporary handler and return to permanent handler
+                       can be reset by calling $pdo->resetTemporaryHandler()
 
 Known issues
 --------------
@@ -280,7 +298,6 @@ class fwpdo
 
 		// switch to user requested error handler
 		$this -> setHandler($args['onerror']);
-		// $this -> setTemporaryHandler($args['onerror']);
 
 		if (array_key_exists ('database', $args) && $args['database'] != '')
 			$this -> database = $args['database'];
@@ -315,14 +332,12 @@ class fwpdo
 		{
 			return $this -> errorHandler(dbCnxPool::getLastError());
 		}
-
-		$this -> resetTemporaryHandler();
 	}
 
 	static public function
 	getVersion(): string
 	{
-		return '1.12';
+		return '1.13';
 	}
 
 	//==================================================
@@ -614,12 +629,7 @@ return;
 	 * Execute any SQL statement
 	 *
 	 * @param string $sql SQL statement to execute
-	 * @param string $onerror (opt) expected behaviour on error
-	 *             if $onerror parm unset, then based on $this->onerror
-	 *             'die' -> write a message on stdout and die
-	 *             'return' -> return false
-	 *             'raise','exception' -> raise an exception
-	 *             'user' -> call function defined by setHandler() and return its return value
+	 * @param string $onerror unused since version 1.13
 	 * @param bool $forceExec (opt) Execute in read-only mode (default: do not execute)
 	 * @return string|bool if bool, true is succes, false is failure
 	 *                     if string, '' is success, else is error message
@@ -653,7 +663,6 @@ return;
 			if ($this -> success)
 				return true;
 
-			$this -> setTemporaryHandler ($onerror);
 			return $this -> errorHandler ($this->msg);
 		}
 		else
@@ -667,6 +676,9 @@ return;
 		$this -> executeSql($sql, 'die');
 	}
 
+	/**
+	 * @param string $onerror unused since v1.13
+	 */
 	private function
 	fetch (string $sql, string $onerror='')
 	{
@@ -698,7 +710,6 @@ return;
 		if ($this -> success)
 			return $arr;
 
-		$this -> setTemporaryHandler ($onerror);
 		return $this -> errorHandler ($this->msg);
 	}
 
@@ -728,7 +739,6 @@ return;
 	count ($fromparm, $whereparm = '', $joinparm = '', $onerror = ''): int
 	{
 // tracelog ('[fwpdo::count] onError: [' . $onerror . ']');
-		$this -> setTemporaryHandler ($onerror);
 
 		if (is_array ($fromparm))	// new syntax
 			$args = $fromparm;
@@ -752,7 +762,6 @@ return;
 			return $this -> errorHandler ('No result');
 		else
 		{
-			$this -> resetTemporaryHandler();
 			return $rows[0]['NB'];
 		}
 	}
@@ -888,7 +897,7 @@ return;
 	 * @param array $args Parms
 	 * @return string SQL statement for reading (SELECT)
 	 */
-	private function
+	public function
 	buildSelectRequest ($args): string
 	{
 		// Create missing entries, if any
@@ -1185,14 +1194,11 @@ return;
 		else // old syntax
 			$args = $this -> buildArgsForOldSyntax(func_get_args(), $opts);
 
-		$this -> setTemporaryHandler ($args['onerror']);
-
 		$sql = $this -> buildDeleteRequest ($args);
 		if ($sql == '')
 			return $this -> errorHandler('Failed to build SQL statement',1,$args['onerror']);
 
 		$cr = $this -> executeSql ($sql);
-		$this -> resetTemporaryHandler();
 		return $cr;
 	}
 
@@ -1449,15 +1455,12 @@ return;
 		else // old syntax
 			$args = $this -> buildArgsForOldSyntax (func_get_args(), $parms);
 
-		$this -> setTemporaryHandler ($args['onerror']);
-
 		$sql = $this -> buildUpdateRequest ($args);
 		if ($sql == '')
 			return $this -> errorHandler('Empty SQL');
 
 		$cr = $this -> executeSql ($sql);
 
-		$this -> resetTemporaryHandler();
 		return $cr;
 	}
 
