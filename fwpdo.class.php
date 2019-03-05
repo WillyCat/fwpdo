@@ -48,6 +48,8 @@ Date        Ver   Who  Change
                        handler will override permanent handler but only for next error
                        when error occurs, fwpdo will behave accordin to temporary handler and return to permanent handler
                        can be reset by calling $pdo->resetTemporaryHandler()
+2019-02-04  1.14  FHO  Added some comments
+                       Cleaned code for $onerror handling
 
 Known issues
 --------------
@@ -256,7 +258,7 @@ class fwpdo
 	// 'port' => (opt)
 	// 'engine' => 'mysql' (default) | 'pgsql' | 'mssql'
 	// 'onerror' =>  'raise' | 'die' (default) | 'return'
-	//                'exist' alias de 'die'
+	//                'exit' alias de 'die'
 	// 'warn_channel' => unused, for compatibility
 	// ])
 	public function
@@ -337,7 +339,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.13';
+		return '1.14';
 	}
 
 	//==================================================
@@ -419,7 +421,7 @@ class fwpdo
 	//==================================================
 
 	/**
-	 * Returns the number of current database
+	 * Returns the name of current database
 	 * @return string Name of database
 	 */
 	public function
@@ -545,8 +547,12 @@ class fwpdo
 		return $sql;
 	}
 
+	/**
+	 * Notify of the execution of an SQL statement
+	 * @parm string $sql SQL statement
+	 */
 	private function
-	startSql ($sql)
+	startSql (string $sql): void
 	{
 		// Reset infos from prev request
 		$this -> msg = '';
@@ -559,16 +565,23 @@ class fwpdo
 		$this -> success = false;
 	}
 
+	/**
+	 * Notify that the SQL statement is now over (success or failed)
+	 */
 	private function
-	stopSql ()
+	stopSql (): void
 	{
 		$this -> time_end   = microtime(true);
 		$this -> duration   = $this -> time_end - $this -> time_start;
 		$this -> record();
 	}
 
+	/**
+	 * Records infos for execution of last SQL statement
+	 * Deprecated - does nothing - to be implemented in a better way than this hack
+	 */
 	private function
-	record ()
+	record (): void
 	{
 return;
 		date_default_timezone_set('Europe/Paris');
@@ -748,7 +761,7 @@ return;
 			$args['where'] = $whereparm;
 			$args['from']  = $fromparm;
 			$args['join']  = $joinparm;
-			$args['onerror'] = $onerror;
+			// $args['onerror'] = $onerror;
 			$args['boolop']  = 'AND';
 		}
 		$args['select'] = 'COUNT(*) NB';
@@ -815,7 +828,9 @@ return;
 	private function
 	buildArgsForOldSelectSyntax ($oldArgs): array
 	{
-		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'groupby', 'onerror' ];
+		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'groupby'
+		// , 'onerror'
+		];
 		return $this -> buildArgsForOldSyntax ($oldArgs, $parms);
 	}
 
@@ -1187,7 +1202,9 @@ return;
 	{
 		$num_args = func_num_args();
 
-		$opts = [  'from', 'where', 'limit', 'onerror' ] ;
+		$opts = [  'from', 'where', 'limit'
+		//, 'onerror'
+		] ;
 
 		if ($num_args  == 1)	// new syntax
 			$args = $this -> addMissing (func_get_arg(0), $opts);
@@ -1196,7 +1213,7 @@ return;
 
 		$sql = $this -> buildDeleteRequest ($args);
 		if ($sql == '')
-			return $this -> errorHandler('Failed to build SQL statement',1,$args['onerror']);
+			return $this -> errorHandler('Failed to build SQL statement');
 
 		$cr = $this -> executeSql ($sql);
 		return $cr;
@@ -1208,7 +1225,9 @@ return;
 	public function
 	delete1(array $args): bool
 	{
-		$opts = [  'from', 'where', 'onerror' ] ;
+		$opts = [  'from', 'where'
+		//, 'onerror'
+		] ;
 		$args['limit'] = 1;
 		$args = $this -> addMissing ($args, $opts);
 
@@ -1216,7 +1235,7 @@ return;
 		if ($this -> nrows != 1)
 		{
 			$this -> success = false;
-			return $this -> errorHandler('delete: no record found',1,$args['onerror']);
+			return $this -> errorHandler('delete: no record found');
 		}
 		return true;
 	}
@@ -1446,7 +1465,9 @@ return;
 	public function
 	update ()
 	{
-		$parms = [ 'from', 'fields', 'where', 'trimall', 'onerror', 'limit', 'join' ];
+		$parms = [ 'from', 'fields', 'where', 'trimall'
+		//, 'onerror'
+		, 'limit', 'join' ];
 
 		$num_args = func_num_args();
 
@@ -1546,7 +1567,6 @@ return;
 	 * 'from' => $tableName, // mandatory
 	 * 'fields' => [ 'field1' => $value1, 'field2' => $value2 ] // mandatory
 	 * 'trimall' => true,	// optional - default is FALSE
-	 * 'onerror' => 'return' // optional - default is keep global behaviour as defined by setHandler()
 	 * ]);
 	 * if ($id == 0)
 	 *   echo $pdo -> getLastError();
@@ -1565,11 +1585,7 @@ return;
 
 		$sql = $this -> buildInsertRequest ($args);
 		
-		if (isset ($args['onerror']))
-			$onerror = $args['onerror'];
-		else
-			$onerror = '';
-		return $this -> insert_sql ($sql, $onerror);
+		return $this -> insert_sql ($sql);
 	}
 
 	private function
@@ -1579,7 +1595,7 @@ return;
 		$parms[] = 'from';
 		$parms[] = 'fields';
 		$parms[] = 'trimall';
-		$parms[] = 'onerror' ;
+		//$parms[] = 'onerror' ;
 		return $this -> buildArgsForOldSyntax($args, $parms);
 	}
 
@@ -1595,6 +1611,7 @@ return;
 	/**
 	 * Insert a single record from an SQL statement
 	 * @param string $sql SQL statement
+	 * @param string $onerror deprecated,unused
 	 * @return int ID of inserted element, 0 if failed
 	 */
 	public function
@@ -1617,13 +1634,11 @@ return;
 
 	/**
 	 * Builds and INSERT statement
-	 * @param string $table Database table
-	 * @param array $fields Array of $fieldname=>$fieldvalue
-	 * @param bool $trimall TRUE if fields should be trim'ed
+	 * @param array $args 'table', 'from', 'fields', 'where', 'trimall'
 	 * @return string
 	 */
 	private function
-	buildInsertRequest ($args): string
+	buildInsertRequest (array $args): string
 	{
 		// Create missing entries, if any
 
@@ -1708,9 +1723,9 @@ return;
 
 	/**
 	 * Indicates if a string starts with a pattern
-	 * @parm string $str
-	 * @parm string $pattern
-	 * @parm bool (opt) $case_sentitive
+	 * @parm string $str haystack
+	 * @parm string $pattern needle
+	 * @parm bool $case_sentitive Optional - default: yes
 	 * @return bool true if string starts with pattern, false otherwise
 	 */
 	private function
