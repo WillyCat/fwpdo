@@ -50,6 +50,9 @@ Date        Ver   Who  Change
                        can be reset by calling $pdo->resetTemporaryHandler()
 2019-02-04  1.14  FHO  Added some comments
                        Cleaned code for $onerror handling
+2019-03-05  1.15  FHO  Upon failure, methods commit(), rollback() returned
+                       FALSE, no matter setting of current error handler
+                       buildWhereStatement now public (used in ol_sql.inc)
 
 Known issues
 --------------
@@ -467,7 +470,7 @@ class fwpdo
 	// array('x' => 3, 'y > 5', array('col'=>'z', 'op'=>'<>', 'val'=>'10')
 	//                         ==> WHERE x = 3 AND y > 5 AND z <> 10
 
-	private function
+	function
 	buildWhereStatement ($whereparm, $boolop = 'AND'): string
 	{
 		return $this -> buildWhereOrHavingStatement($whereparm, 'WHERE', $boolop);
@@ -1397,12 +1400,16 @@ return;
 			try
 			{
 				if (!$this -> pdo -> commit())
+				{
+					return $this -> errorHandler('Commit failed');
 					return false;
+				}
 //tracelog ('[fwpdo::commit] commit successful');
 			}
 			catch (PDOException $e)
 			{
-				return false;
+				//return false;
+				return $this -> errorHandler('Commit failed');
 			}
 			$this -> transactionCount = 0;
 			return true;
@@ -1438,7 +1445,8 @@ return;
 			}
 			catch (PDOException $e)
 			{
-				return false;
+				//return false;
+				return $this -> errorHandler('Rollback failed');
 			}
 
 			$this -> transactionCount = 0;
