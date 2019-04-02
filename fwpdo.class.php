@@ -53,6 +53,10 @@ Date        Ver   Who  Change
 2019-03-05  1.15  FHO  Upon failure, methods commit(), rollback() returned
                        FALSE, no matter setting of current error handler
                        buildWhereStatement now public (used in ol_sql.inc)
+2019-04-02  1.16  FHO  - buildWhereStatement now accepts [ 'col' => [ 'op' => '<>', 'value' => 12 ] ]
+                       result is same as [ [ 'col' => 'col', 'op' => '<>', 'value' => 12 ] ]
+                       i.e. " WHERE col <> 12 "
+                       - 'x' => [] used to generate "WHERE x IN ()" now generates nothing
 
 Known issues
 --------------
@@ -463,12 +467,14 @@ class fwpdo
 	 * @param array $fields Array of $fieldname=>$fieldvalue
 	 * @return string WHERE part of an SQL statement
 	 */
-	// 'x > 3'                 ==> WHERE x > 3
-	// 'x IS NULL'             ==> WHERE x IS NULL
-	// array('x > 3', 'y > 5') ==> WHERE x > 3 AND y > 5
-	// array('x' => 3)         ==> WHERE x = 3
-	// array('x' => 3, 'y > 5', array('col'=>'z', 'op'=>'<>', 'val'=>'10')
-	//                         ==> WHERE x = 3 AND y > 5 AND z <> 10
+	// 'x > 3'                  ==> WHERE x > 3
+	// 'x IS NULL'              ==> WHERE x IS NULL
+	// array('x > 3', 'y > 5')  ==> WHERE x > 3 AND y > 5
+	// array('x' => 3)          ==> WHERE x = 3
+	// array('x' => 3, 'y > 5', 'x' => [ 'op'=>'<>', 'val'=>'10' ]
+	//                          ==> WHERE x = 3 AND y > 5 AND z <> 10
+	// 'x' => [ 'a', 'b' ]      ==> WHERE x IN ('a', 'b')
+	// 'x' => [ 'op'=>'>', 12 ] ==> WHERE x > 12
 
 	function
 	buildWhereStatement ($whereparm, $boolop = 'AND'): string
@@ -524,25 +530,38 @@ class fwpdo
 				if (is_null ($item))
 					$part = $col . ' IS NULL';
 				else
+				{
 					if (is_array($item))	// Added 2017-11-25
 					{
 						$part = '';
-						$part .= $col;
-						$part .= ' IN ';
-						$part .= '(';
-						$valuesarray = [ ];
-						foreach ($item as $invalue)
-							$valuesarray[] = $this->formatFieldValue($invalue);
-						$part .= implode (',' , $valuesarray);
-						$part .= ')';
+						if (array_key_exists ('op', $item))
+						{
+							$part = $this->formatFieldName($col) . $item['op'] . $this->formatFieldValue($item['value']) ;
+						}
+						else
+							if (count ($item) > 0) // added 2019-04-02 to avoid => WHERE col IN ()
+							{
+								$part .= $col;
+								$part .= ' IN ';
+								$part .= '(';
+								$valuesarray = [ ];
+								foreach ($item as $invalue)
+									$valuesarray[] = $this->formatFieldValue($invalue);
+								$part .= implode (',' , $valuesarray);
+								$part .= ')';
+							}
 					}
 					else
 						$part = $col . '=' . $this->formatFieldValue($item);
+				}
 
-			if ($sql == '')
-				$sql .= " \n" . $statement . ' ';
-			else
-				$sql .= "\n  ".$boolop." ";
+			if ($part != '')
+			{
+				if ($sql == '')
+					$sql .= " \n" . $statement . ' ';
+				else
+					$sql .= "\n  ".$boolop." ";
+			}
 
 			$sql .= $part;
 		}
