@@ -57,6 +57,7 @@ Date        Ver   Who  Change
                        result is same as [ [ 'col' => 'col', 'op' => '<>', 'value' => 12 ] ]
                        i.e. " WHERE col <> 12 "
                        - 'x' => [] used to generate "WHERE x IN ()" now generates nothing
+2019-04-18  1.17  FHO  getPDO now accepts 'persistent' key (true/false) to parameter persistent/non-persistent db connection - default is non-persistent, consistent with previous versions
 
 Known issues
 --------------
@@ -91,6 +92,7 @@ class dbCnxPool
 	 */
 	private function
 	__construct() {  
+		$this -> persistent = false;
 	}
 
 	/**
@@ -147,21 +149,26 @@ class dbCnxPool
 		$dsn = $engine . ':' . implode (';', $dsnparts);
 // echo 'DSN: ' . $dsn . "\n";
 
+		$opts = [ ];
+
+		if (array_key_exists ('persistent', $args) && $args['persistent'])
+			opts[PDO::ATTR_PERSISTENT] = true; // persistent connections
+
 		try
 		{
 			switch ($engine)
 			{
 			case 'mysql' :
-				$pdo = new PDO( $dsn, $args['username'], $args['passwd']);
+				$pdo = new PDO( $dsn, $args['username'], $args['passwd'], $opts);
 				break;
 			case 'pgsql' :
 				$dsn .= ';user=' . $args['username'];
 				$dsn .= ';password=' . $args['passwd'];
 				$dsn .= ';port=' . 5432;
-				$pdo = new PDO($dsn);
+				$pdo = new PDO($dsn, null, null, $opts);
 				break;
 			case 'dblib' :
-				$pdo = new PDO( $dsn, $args['username'], $args['passwd']);
+				$pdo = new PDO( $dsn, $args['username'], $args['passwd'], $opts);
 				break;
 			default :
 				throw new Exception ('engine not implemented: ' . $engine);
@@ -346,7 +353,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.14';
+		return '1.17';
 	}
 
 	//==================================================
