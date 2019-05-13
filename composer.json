@@ -1,0 +1,7 @@
+{
+    "name": "willycat/fwpdo",
+    "description": "PHP PDO wrapper",
+    "require": {
+        "php": "^7.2"
+    }
+}
