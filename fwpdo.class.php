@@ -46,7 +46,7 @@ Date        Ver   Who  Change
                        call $pdo->setTemporaryHandler()
                        same options as setHandler()
                        handler will override permanent handler but only for next error
-                       when error occurs, fwpdo will behave accordin to temporary handler and return to permanent handler
+                       when error occurs, fwpdo will behave according to temporary handler and return to permanent handler
                        can be reset by calling $pdo->resetTemporaryHandler()
 2019-02-04  1.14  FHO  Added some comments
                        Cleaned code for $onerror handling
@@ -58,6 +58,12 @@ Date        Ver   Who  Change
                        i.e. " WHERE col <> 12 "
                        - 'x' => [] used to generate "WHERE x IN ()" now generates nothing
 2019-04-18  1.17  FHO  getPDO now accepts 'persistent' key (true/false) to parameter persistent/non-persistent db connection - default is non-persistent, consistent with previous versions
+2019-05-13  1.18  FHO  removed support for multiple error handlers
+                       all errors raise exceptions
+                       deprecated: setHandler, getHandler, resetHandler,
+                       errorHandler,
+                       setTemporaryHandler, resetTemporaryHandler
+                       various code cleaning: removed all references to onerror
 
 Known issues
 --------------
@@ -76,7 +82,9 @@ added limit for update
 // at first call, will create a PDO object
 // subsequent calls for same 'database' value will return previously created object
 
-require_once 'errorhandler.class.php';
+class fwpdoException extends Exception
+{
+}
 
 class dbCnxPool
 {
@@ -232,10 +240,6 @@ class dbCnxPool
 
 class fwpdo
 {
-	use errorhandler;
-
-	private $onerror;
-
 	private $host;
 	private $database;
 	private $transactionCount;
@@ -271,8 +275,6 @@ class fwpdo
 	// 'socket' => (opt)
 	// 'port' => (opt)
 	// 'engine' => 'mysql' (default) | 'pgsql' | 'mssql'
-	// 'onerror' =>  'raise' | 'die' (default) | 'return'
-	//                'exit' alias de 'die'
 	// 'warn_channel' => unused, for compatibility
 	// ])
 	public function
@@ -285,16 +287,13 @@ class fwpdo
 		case 6 : // f($host, $username, $passwd, $database, $engine, $port)
 		case 7 : // f($host, $username, $passwd, $database, $engine, $port, $warn_channel)
 		case 8 : // f($host, $username, $passwd, $database, $engine, $port, $warn_channel, $socket)
-			$args = self::buildArgsForOldSyntax(func_get_args(),['host','username', 'passwd', 'database', 'engine', 'port', 'warn_channel', 'socket' ] );
+			$args = self::buildArgsFromOldSyntax(func_get_args(),['host','username', 'passwd', 'database', 'engine', 'port', 'warn_channel', 'socket' ] );
 			break;
 
 		case 1 : // f([])
 			$args = func_get_arg(0);
 			if (!is_array ($args))
-			{
-				$this -> setTemporaryHandler('exception');
-				return $this -> errorHandler('Syntax error');
-			}
+				throw new fwpdoException('Syntax error');
 			break;
 
 		default :
@@ -309,11 +308,6 @@ class fwpdo
 		if ($args['engine'] == '')
 			$args['engine'] = 'mysql';
 		$this -> engine = $args['engine'];
-
-		$args = self::addMissing($args, [ 'onerror' ], 'die' );
-
-		// switch to user requested error handler
-		$this -> setHandler($args['onerror']);
 
 		if (array_key_exists ('database', $args) && $args['database'] != '')
 			$this -> database = $args['database'];
@@ -345,15 +339,13 @@ class fwpdo
 		$this -> transactionCount = 0;
 
 		if ($this -> pdo == null)
-		{
-			return $this -> errorHandler(dbCnxPool::getLastError());
-		}
+			throw new fwpdoException(dbCnxPool::getLastError());
 	}
 
 	static public function
 	getVersion(): string
 	{
-		return '1.17';
+		return '1.18';
 	}
 
 	//==================================================
@@ -671,15 +663,14 @@ return;
 	 * Execute any SQL statement
 	 *
 	 * @param string $sql SQL statement to execute
-	 * @param string $onerror unused since version 1.13
 	 * @param bool $forceExec (opt) Execute in read-only mode (default: do not execute)
 	 * @return string|bool if bool, true is succes, false is failure
 	 *                     if string, '' is success, else is error message
-	 *                     function code returns bool but also uses returns errorHandler that returns string
 	 * @todo fix inconsistencies in return type
+	 * @throws fwpdoException
 	 */
 	public function
-	executeSql (string $sql, string $onerror = '', bool $forceExec = false)
+	executeSql (string $sql, string $dummy='', bool $forceExec = false)
 	{
 		if ($this -> recording)
 			$this -> doRecord ($sql);
@@ -705,7 +696,7 @@ return;
 			if ($this -> success)
 				return true;
 
-			return $this -> errorHandler ($this->msg);
+			throw new fwpdoException($this -> msg);
 		}
 		else
 			$this -> doRecord ($sql);
@@ -715,14 +706,18 @@ return;
 	private function
 	must_executeSql (string $sql)
 	{
-		$this -> executeSql($sql, 'die');
+		try {
+			$this -> executeSql($sql);
+		} catch (Exception $e) {
+			die($e -> getMessage());
+		}
 	}
 
 	/**
-	 * @param string $onerror unused since v1.13
+	 * @throws fwpdoException
 	 */
 	private function
-	fetch (string $sql, string $onerror='')
+	fetch (string $sql)
 	{
 		$this -> startSql ($sql);
 		try
@@ -731,11 +726,6 @@ return;
 			$st = $this->pdo->query($sql); // returns a PDOStatement
 			$this->nrows = $st -> rowCount();
 			$arr = array();
-			// [ 1.11 ] remplaced loop on fetch() by fetchAll()
-/*
-			while (($row = $st -> fetch(PDO::FETCH_ASSOC)))
-				$arr[] = $row;
-*/
 			$arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 			$this -> success = true;
 		}
@@ -752,15 +742,19 @@ return;
 		if ($this -> success)
 			return $arr;
 
-		return $this -> errorHandler ($this->msg);
+		throw new fwpdoException($this -> msg);
 	}
 
+	/**
+	 * @throws fwpdoException
+	 */
+
 	private function
-	buildArgsForOldSyntax (array $oldArgs, array $parms): array
+	buildArgsFromOldSyntax (array $oldArgs, array $parms): array
 	{
 		$num_args = count ($oldArgs);
 		if ($num_args > count ($oldArgs))
-			return $this -> errorHandler ('too many parameters', 1);
+			throw new fwpdoException('too many parameters');
 
 		$newArgs = array();
 		$argi = 0;
@@ -777,11 +771,13 @@ return;
 	//                            COUNT
 	//--------------------------------------------------------------------
 
-	public function
-	count ($fromparm, $whereparm = '', $joinparm = '', $onerror = ''): int
-	{
-// tracelog ('[fwpdo::count] onError: [' . $onerror . ']');
+	/**
+	 * @throws fwpdoException
+	 */
 
+	public function
+	count ($fromparm, $whereparm = '', $joinparm = '', $dummy=''): int
+	{
 		if (is_array ($fromparm))	// new syntax
 			$args = $fromparm;
 		else
@@ -790,7 +786,6 @@ return;
 			$args['where'] = $whereparm;
 			$args['from']  = $fromparm;
 			$args['join']  = $joinparm;
-			// $args['onerror'] = $onerror;
 			$args['boolop']  = 'AND';
 		}
 		$args['select'] = 'COUNT(*) NB';
@@ -801,17 +796,18 @@ return;
 		$rows = $this -> select ($args);
 //tracelog ('[fwpdo::count] ' . $this->sql);
 		if (!$rows || $rows == '' || count($rows) < 1)
-			return $this -> errorHandler ('No result');
-		else
-		{
-			return $rows[0]['NB'];
-		}
+			throw new fwpdoException('No result');
+		return $rows[0]['NB'];
 	}
 
 	public function
 	must_count ($fromparm, $whereparm = '', $joinparm = ''): int
 	{
-		return $this -> count ($fromparm, $whereparm, $joinparm, 'die');
+		try {
+			 $this -> count ($fromparm, $whereparm, $joinparm);
+		} catch (Exception $e) {
+			die($e -> getMessage());
+		}
 	}
 
 	//--------------------------------------------------------------------
@@ -820,13 +816,16 @@ return;
 
 	// describe ('table')
 	// describe ([ 'from' => 'table', 'where' => [ ... ] );
+	/**
+	 * @throws fwpdoException
+	 */
 	public function
 	describe ()
 	{
 		$num_args = func_num_args();
 
 		if ($num_args  != 1)
-			return $this -> errorHandler ('fwpdo::describe() expects 1 parameter', 1);
+			throw new fwpdoException('too many parameters');
 
 		$args = func_get_arg(0);
 		if (!is_array( $args ))
@@ -835,14 +834,14 @@ return;
 		$args = $this -> addMissing ($args, [ 'boolop' ], 'AND' );
 
 		if (!array_key_exists ('from', $args) || $args['from'] == '')
-			return $this -> errorHandler ('fwpdo::describe() missing table', 1);
+			throw new fwpdoException('missing table');
 
 		$whereStatement   = $this -> buildWhereStatement ($args['where'], $args['boolop']);
 		$fromStatement    = $args['from'];
 		$sql = $this -> concatStrings(  'SHOW COLUMNS FROM', $fromStatement, $whereStatement );
 
 		if ($sql == '')
-			return $this -> errorHandler ('fwpdo::describe() unable to build SQL statement', 1);
+			throw new fwpdoException('unable to build SQL statement');
 
 		$rows = $this->fetch ($sql);
 
@@ -857,12 +856,13 @@ return;
 	private function
 	buildArgsForOldSelectSyntax ($oldArgs): array
 	{
-		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'groupby'
-		// , 'onerror'
-		];
-		return $this -> buildArgsForOldSyntax ($oldArgs, $parms);
+		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'groupby' ];
+		return $this -> buildArgsFromOldSyntax ($oldArgs, $parms);
 	}
 
+	/**
+	 * @throws fwpdoException
+	 */
 	public function
 	select1 (array $pdoparms): ?array
 	{
@@ -870,10 +870,13 @@ return;
 		if ($this -> num_rows () == 0)
 			return null;
 		if ($this -> num_rows() > 1)
-			throw new Exception ('select1: mutiple results');
+			throw new fwpdoException ('select1: mutiple results');
 		return $rows[0];
 	}
 
+	/**
+	 * @throws fwpdoException
+	 */
 	// select() accepts various syntaxes and argument types
 	// 1- an array (best choice)
 	// select( [ 'select' => '*', 'from' => 'table', 'where' => ['field'=>1] ] )
@@ -888,7 +891,7 @@ return;
 		$num_args = func_num_args();
 
 		if ($num_args  == 0)
-			return $this -> errorHandler ('fwpdo::select() expects 1 parameter', 1);
+			throw new fwpdoException('missing parameter');
 
 		if ($num_args  == 1)	// new syntax
 		{
@@ -902,7 +905,7 @@ return;
 		{
 			$args = $this -> buildArgsForOldSelectSyntax(func_get_args() );
 			if ($args == '')
-				return $this -> errorHandler ('fwpdo::select() bad parameters', 1);
+				throw new fwpdoException('wrong parameters');
 			$sql = $this -> buildSelectRequest($args);
 		}
 
@@ -913,27 +916,41 @@ return;
 		return $rows;
 	}
 
+	/**
+	 * @throws fwpdoException
+	 */
 	public function
 	select_sql (string $sql): array
 	{
 		$result = $this -> fetch ($sql);
 		if (is_array($result))
 			return $result;
-		throw new Exception ('fwpdo::select_sql failed for ' . $sql . ': ' . $this->shortmsg);
+		throw new fwpdoException ('fwpdo::select_sql failed for ' . $sql . ': ' . $this->shortmsg);
 	}
 
 	// for compatibility only
 	public function
 	must_select ($selectparm, $fromparm, $whereparm='', $orderItems="", $limitstr="", $joinparm = '', $sortorder = '', $groupparm = '')
 	{
-		return $this->select($selectparm, $fromparm, $whereparm, $orderItems, $limitstr, $joinparm, $sortorder, $groupparm, 'die');
+		try
+		{
+			$this->select($selectparm, $fromparm, $whereparm, $orderItems, $limitstr, $joinparm, $sortorder, $groupparm);
+		} catch (Exception $e) {
+			die($e -> getMessage());
+		}
+		return true;
 	}
 
 	// for compatibility only
 	public function
-	must_select_sql ($sql)
+	must_select_sql (string $sql)
 	{
-		return $this -> fetch ($sql, 'die');
+		try
+		{
+			$this -> fetch ($sql);
+		} catch (Exception $e) {
+			die($e -> getMessage());
+		}
 	}
 
 	/**
@@ -963,7 +980,7 @@ return;
 		// it is required that requests with no FROM set the parm to NULL
 		// otherwise, an exception (missing from) will be raised
 		if ($args['from'] == 'MISSING')
-			return $this -> errorHandler ('fwpdo::select() Missing FROM');
+			throw new fwpdoException('missing FROM');
 		if ($args['from'] == null) // legal no 'from'
 			$fromStatement    = '';
 		else	// non-empty 'from' MUST be provided
@@ -980,11 +997,8 @@ return;
 		// check mandatory ones
 		//---------------------------------
 
-		// if ($fromStatement == '')
-			// return $this -> errorHandler ('fwpdo::select() Empty FROM', 1);
-
 		if ($selectStatement == '')
-			return $this -> errorHandler ('fwpdo::select() Empty SELECT', 1);
+			throw new fwpdoException('empty SELECT FROM');
 
 		// Canot use ASC or DESC when no ORDER set
 		if ($orderStatement != '' && $orderByStatement == '')
@@ -1040,6 +1054,9 @@ return;
 		return $selectStatement;
 	}
 
+	/**
+	 * @throws fwpdoException
+	 */
 	private function
 	buildTablesList ($tablesParm): string
 	{
@@ -1049,7 +1066,7 @@ return;
 			$tables = $tablesParm;
 
 		if ($tables == '')
-			throw new Exception ('No table provided');
+			throw new fwpdoException ('No table provided');
 
 //echo '['.$tables.']';
 		return $tables;
@@ -1211,14 +1228,14 @@ return;
 	 * @param mixed $from
 	 * @param mixed $where
 	 * @param mixed $limit
-	 * @param mixed $onerror
 	 * @return bool true if success, calls errorhandler if fails
 	 */
 
 	/**
 	 * Issue a DELETE request (new syntax)
-	 * @param array $parms (from, where, limit, onerror)
+	 * @param array $parms (from, where, limit)
 	 * @return bool true if success, calls errorhandler if fails
+	 * @throws fwpdoException
 	 *
 	 * caution: if no record is found (so no delete occurs),
 	 * the method will be considered as ok
@@ -1231,32 +1248,31 @@ return;
 	{
 		$num_args = func_num_args();
 
-		$opts = [  'from', 'where', 'limit'
-		//, 'onerror'
-		] ;
+		$opts = [  'from', 'where', 'limit' ] ;
 
 		if ($num_args  == 1)	// new syntax
 			$args = $this -> addMissing (func_get_arg(0), $opts);
 		else // old syntax
-			$args = $this -> buildArgsForOldSyntax(func_get_args(), $opts);
+			$args = $this -> buildArgsFromOldSyntax(func_get_args(), $opts);
 
 		$sql = $this -> buildDeleteRequest ($args);
 		if ($sql == '')
-			return $this -> errorHandler('Failed to build SQL statement');
+			throw new fwpdoException('failed to build SQL statement');
 
-		$cr = $this -> executeSql ($sql);
-		return $cr;
+		$this -> executeSql ($sql);
+		return true;
 	}
 
 	// this is a new function, it does not implements compatibility mode with multiple args
 	// if it cannot delete 1 record (no record matches where clause for example), it will return an error
 	// this differs from the behaviour of delete()
+	/**
+	 * @throws fwpdoException
+	 */
 	public function
 	delete1(array $args): bool
 	{
-		$opts = [  'from', 'where'
-		//, 'onerror'
-		] ;
+		$opts = [  'from', 'where' ] ;
 		$args['limit'] = 1;
 		$args = $this -> addMissing ($args, $opts);
 
@@ -1264,7 +1280,7 @@ return;
 		if ($this -> nrows != 1)
 		{
 			$this -> success = false;
-			return $this -> errorHandler('delete: no record found');
+			throw new fwpdoException('no record found');
 		}
 		return true;
 	}
@@ -1273,22 +1289,33 @@ return;
 	public function
 	deleteOrDie ($table, $whereset)
 	{
-		$this -> delete ($table, $whereset, '', 'die');
+		try
+		{
+			$this -> delete ($table, $whereset);
+		} catch (Exception $e) {
+			die ($e -> getMessage() );
+		}
 	}
 
 	/**
-	 * @return bool true if success, false if failure
+	 * @throws fwpdoException
 	 */
 	public function
-	deleteSql (array $sql, string $onerror = '')
+	deleteSql (array $sql, string $dummy=''): bool
 	{
-		return $this -> executeSql ($sql, $onerror);
+		$this -> executeSql ($sql);
+		return true;
 	}
 
 	public function
 	must_delete_sql (array $sql)
 	{
-		return $this -> delete_sql ($sql, 'die');
+		try
+		{
+			$this -> delete_sql ($sql);
+		} catch (Exception $e) {
+			die ($e -> getMessage() );
+		}
 	}
 
 	private function
@@ -1426,16 +1453,11 @@ return;
 			try
 			{
 				if (!$this -> pdo -> commit())
-				{
-					return $this -> errorHandler('Commit failed');
-					return false;
-				}
-//tracelog ('[fwpdo::commit] commit successful');
+					throw new fwpdoException('commit failed');
 			}
 			catch (PDOException $e)
 			{
-				//return false;
-				return $this -> errorHandler('Commit failed');
+				throw new fwpdoException('commit failed');
 			}
 			$this -> transactionCount = 0;
 			return true;
@@ -1471,8 +1493,7 @@ return;
 			}
 			catch (PDOException $e)
 			{
-				//return false;
-				return $this -> errorHandler('Rollback failed');
+				throw new fwpdoException('rollback failed');
 			}
 
 			$this -> transactionCount = 0;
@@ -1500,7 +1521,6 @@ return;
 	update ()
 	{
 		$parms = [ 'from', 'fields', 'where', 'trimall'
-		//, 'onerror'
 		, 'limit', 'join' ];
 
 		$num_args = func_num_args();
@@ -1508,21 +1528,21 @@ return;
 		if ($num_args  == 1)	// new syntax
 			$args = $this -> addMissing (func_get_arg(0), $parms);
 		else // old syntax
-			$args = $this -> buildArgsForOldSyntax (func_get_args(), $parms);
+			$args = $this -> buildArgsFromOldSyntax (func_get_args(), $parms);
 
 		$sql = $this -> buildUpdateRequest ($args);
 		if ($sql == '')
-			return $this -> errorHandler('Empty SQL');
+			throw new fwpdoException('empty SQL');
 
-		$cr = $this -> executeSql ($sql);
+		$this -> executeSql ($sql);
 
-		return $cr;
+		return true;
 	}
 
 	public function
 	must_update (string $table, array $fields, $whereset, bool $trimall=false)
 	{
-		return $this -> update ($table, $fields, $whereset, $trimall, 'die');
+		return $this -> update ($table, $fields, $whereset, $trimall);
 	}
 
 	/**
@@ -1532,15 +1552,21 @@ return;
 	 * @return boolean True if sucessful, false is failed
 	 */
 	public function
-	update_sql (string $sql, bool $trimall = false, string $onerror = '')
+	update_sql (string $sql, bool $trimall = false, string $dummy=''): bool
 	{
-		return $this -> executeSql ($sql, $onerror);
+		$this -> executeSql ($sql);
+		return true;
 	}
 
 	public function
 	must_update_sql (string $sql, bool $trimall = false)
 	{
-		return $this -> update_sql ($sql, $trimall, 'die');
+		try
+		{
+			$this -> update_sql ($sql, $trimall);
+		} catch (Exception $e) {
+			die ($e -> getMessage());
+		} 
 	}
 
 	/**
@@ -1615,7 +1641,7 @@ return;
 		if ($num_args  == 1)	// new syntax
 			$args = func_get_arg(0);
 		else // old syntax
-			$args = $this -> buildArgsForOldInsertSyntax(func_get_args());
+			$args = $this -> buildArgsFromOldInsertSyntax(func_get_args());
 
 		$sql = $this -> buildInsertRequest ($args);
 		
@@ -1623,47 +1649,23 @@ return;
 	}
 
 	private function
-	buildArgsForOldInsertSyntax (array $args): array
+	buildArgsFromOldInsertSyntax (array $args): array
 	{
-		$parms = array();
-		$parms[] = 'from';
-		$parms[] = 'fields';
-		$parms[] = 'trimall';
-		//$parms[] = 'onerror' ;
-		return $this -> buildArgsForOldSyntax($args, $parms);
-	}
-
-	/**
-	 * [DEPRECATED] Insert or die
-	 */
-	public function
-	must_insert (string $table, array $fields, bool $trimall=false)
-	{
-		return $this -> insert ($table, $fields, $trimall, 'die');
+		return $this -> buildArgsFromOldSyntax($args, ['from','fields','trimall']);
 	}
 
 	/**
 	 * Insert a single record from an SQL statement
 	 * @param string $sql SQL statement
-	 * @param string $onerror deprecated,unused
 	 * @return int ID of inserted element, 0 if failed
 	 */
 	public function
-	insert_sql (string $sql, string $onerror = ''): int
+	insert_sql (string $sql, string $dummy=''): int
 	{
-		if (!$this -> executeSql($sql, $onerror))
+		if (!$this -> executeSql($sql))
 			return 0;
 
 		return $this -> lastInsertId();
-	}
-
-	/**
-	 * [DEPRECATED] Insert or die
-	 */
-	public function
-	must_insert_sql (string $sql)
-	{
-		return $this -> insert_sql ($sql, 'die');
 	}
 
 	/**
@@ -1826,17 +1828,20 @@ return;
 	public function get_database () { return $this -> getDatabase(); }
 	public function num_rows () { return $this -> numRows(); }
 	public function set_charset ($charset) { return $this -> setCharset($charset); }
-	public function must_delete ($table, $whereset) { return $this -> deleteOrDie($table, $whereset); }
-	public function delete_sql ($sql, $onerror = '') { return $this -> deleteSql ($sql, $onerror); }
+	public function must_delete ($table, $whereset) { try { $this -> deleteOrDie($table, $whereset); } catch (Exception $e) { die($e -> getMessage()); } }
+	public function delete_sql ($sql, $dummy='') { return $this -> deleteSql ($sql); }
+	public function must_insert_sql (string $sql) { try { $this -> insert_sql ($sql); } catch (Exception $e) { die($e -> getMessage()); } }
+	public function must_insert (string $table, array $fields, bool $trimall=false) { try { $this -> insert ($table, $fields, $trimall); } catch (Exception $e) { die ($e->getMessage()); } }
 	public function setwarnchannel($channel) { }
 
 	public function
 	sql_build_select ($selectarr, $fromarr, $wherearr, $orderarr, $limitstr,$joinarr, $sortorder, $grouparr, $havingarr)
 	{
 		$parms = [  'select', 'from', 'where', 'orderby', 'limit', 'join', 'order', 'groupby', 'having' ];
-		$newArgs = $this -> buildArgsForOldSyntax (func_get_args(), $parms);
+		$newArgs = $this -> buildArgsFromOldSyntax (func_get_args(), $parms);
 		$sql = $this -> buildSelectRequest ($newArgs);
 		return $sql;
 	}
+	public function setHandler() { }
 }
 ?>
