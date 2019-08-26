@@ -64,6 +64,7 @@ Date        Ver   Who  Change
                        errorHandler,
                        setTemporaryHandler, resetTemporaryHandler
                        various code cleaning: removed all references to onerror
+2019-08-20  1.19  FHO  new: use(), prepare()
 
 Known issues
 --------------
@@ -345,7 +346,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.18';
+		return '1.19';
 	}
 
 	//==================================================
@@ -767,6 +768,31 @@ return;
 		return $newArgs;
 	}
 
+	public function
+	use (string $dbname): void
+	{
+		$sql = 'USE ' . $dbname;
+		$this -> executeSql ($sql, '', true);
+	}
+
+	public function
+	prepare (string $verb, array $parms): PDOstatement
+	{
+		switch ($verb)
+		{
+		case 'select' :
+			return $this -> prepareSelect($parms);
+		case 'update' :
+			return $this -> prepareUpdate($parms);
+		case 'insert' :
+			return $this -> prepareInsert($parms);
+		case 'delete' :
+			return $this -> prepareDelete($parms);
+		default :
+			throw new fwpdoException ('unknown statement: ' . $verb);
+		}
+	}
+
 	//--------------------------------------------------------------------
 	//                            COUNT
 	//--------------------------------------------------------------------
@@ -872,6 +898,14 @@ return;
 		if ($this -> num_rows() > 1)
 			throw new fwpdoException ('select1: mutiple results');
 		return $rows[0];
+	}
+
+	private function
+	prepareSelect (array $parms): PDOstatement
+	{
+		$sql = $this -> buildSelectRequest ($args);
+		$st = $this -> pdo -> prepare ($sql);
+		return $st;
 	}
 
 	/**
@@ -1263,6 +1297,14 @@ return;
 		return true;
 	}
 
+	private function
+	prepareDelete (array $parms): PDOstatement
+	{
+		$sql = $this -> buildDeleteRequest ($args);
+		$st = $this -> pdo -> prepare ($sql);
+		return $st;
+	}
+
 	// this is a new function, it does not implements compatibility mode with multiple args
 	// if it cannot delete 1 record (no record matches where clause for example), it will return an error
 	// this differs from the behaviour of delete()
@@ -1539,6 +1581,14 @@ return;
 		return true;
 	}
 
+	private function
+	prepareUpdate (array $parms): PDOstatement
+	{
+		$sql = $this -> buildUpdateRequest ($args);
+		$st = $this -> pdo -> prepare ($sql);
+		return $st;
+	}
+
 	public function
 	must_update (string $table, array $fields, $whereset, bool $trimall=false)
 	{
@@ -1646,6 +1696,14 @@ return;
 		$sql = $this -> buildInsertRequest ($args);
 		
 		return $this -> insert_sql ($sql);
+	}
+
+	private function
+	prepareInsert (array $parms): PDOstatement
+	{
+		$sql = $this -> buildInsertRequest ($args);
+		$st = $this -> pdo -> prepare ($sql);
+		return $st;
 	}
 
 	private function
