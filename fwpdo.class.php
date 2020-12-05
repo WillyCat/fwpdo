@@ -64,7 +64,10 @@ Date        Ver   Who  Change
                        errorHandler,
                        setTemporaryHandler, resetTemporaryHandler
                        various code cleaning: removed all references to onerror
-2019-08-20  1.19  FHO  new: use(), prepare()
+2019-08-31  1.19  FHO  recreated dummy functions resetTemporaryHandler, setTemporaryHandler for compatibility
+2020-12-03  1.20  FHO  fixed issue in dbCnxPool::closeAll
+                       pgsql: requested port was overriden with default port
+                       new class dsn
 
 Known issues
 --------------
@@ -87,6 +90,73 @@ class fwpdoException extends Exception
 {
 }
 
+class dsn
+{
+	/*
+	// PHP 8
+	private string $engine;
+	private string $database;
+	private string $host;
+	private string $socket;
+	private string $port;
+	*/
+	// PHP 7
+	private $engine;
+	private $database;
+	private $host;
+	private $socket;
+	private $port;
+
+	public function __construct (array $args)
+	{
+		$this -> dsn = '';
+
+		foreach ([ 'engine', 'host', 'database' ] as $parameter)
+			if (!array_key_exists ($parameter, $args) || $args[$parameter] == '' || is_null($args[$parameter]) )
+				throw new Exception ($parameter . ' is mandatory');
+
+		foreach ([ 'engine', 'host', 'port', 'socket', 'database' ] as $parameter)
+			if (array_key_exists ($parameter, $args))
+				$this -> $parameter = $args[$parameter];
+			else
+				$this -> $parameter = '';
+
+		if (!in_array ($this -> engine, [ 'mysql', 'pgsql', 'mssql' ] ))
+			throw new Exception ('engine not supported: [' . $this -> engine . ']');
+
+		// mssql is an alias for dblib
+		if ($this -> engine == 'mssql')
+			$this -> engine = 'dblib';
+	}
+
+	public function __toString(): string
+	{
+		return $this -> build();
+	}
+
+	private function build(): string
+	{
+		$dsnItems = [ ];
+
+		if (!($this -> engine == 'dblib' && $this -> database == '<default>'))
+			$dsnItems['dbname'] = $this -> database;
+
+		foreach ([ 'host', 'port' ] as $parameter)
+			if (isset ($this -> $parameter))
+				$dsnItems[$parameter] = $this -> $parameter;
+
+		if (isset ($args['socket']))
+			$dsnItems['unix_socket'] = $args['socket'];
+
+		$dsnparts = [ ];
+		foreach ($dsnItems as $name => $value)
+			$dsnparts[] = $name . '=' . $value;
+		$dsn = $this -> engine . ':' . implode (';', $dsnparts);
+
+		return $dsn;
+	}
+}
+
 class dbCnxPool
 {
 	private static $dbLinks;
@@ -101,8 +171,8 @@ class dbCnxPool
 	 */
 	private function
 	__construct() {  
-		$this -> persistent = false;
 	}
+
 
 	/**
 	 * getPDO
@@ -112,57 +182,30 @@ class dbCnxPool
 	 * @return object PDO for this database or false if failed
 	 */
 	public static function
-	getPDO ($args): ?PDO
+	getPDO (array $args): ?PDO
 	{
 		// 1st call: create connexion pool
 		if (is_null(self::$dbLinks)) {
 			self::$dbLinks = array();
 		}
 
-// print_r ($args);
-		//-------------
-		// Get engine
-		//-------------
-		if (!array_key_exists ('engine', $args))
-			throw new Exception ('engine is mandatory');
-		$engine = $args['engine'];
-		if (!in_array ($engine, [ 'mysql', 'pgsql', 'mssql' ] ))
-			throw new Exception ('engine not supported: [' . $engine . ']');
-
-		// mssql is an alias for dblib
-		if ($engine == 'mssql')
-			$engine = 'dblib';
-
 		// search for this database
+		if (!isset ($args['database']))
+			throw new Exception ('missign database name');
 		$database = $args['database'];
 		if (isset (self::$dbLinks[$database]))
 			return self::$dbLinks[$args['database']]['pdo'];
 
-		$dsnItems = [ ];
+		// build DSN
+		$dsn = (string)new dsn ($args);
 
-		if (!($engine == 'dblib' && $args['database'] == '<default>'))
-			$dsnItems['dbname'] = $args['database'];
-
-		$dsnItems['host'] = $args['host'];
-
-		if (isset ($args['socket']))
-			$dsnItems['unix_socket'] = $args['socket'];
-
-		if (isset ($args['port']))
-			$dsnItems['port'] = $args['port'];
-
-		$dsnparts = [ ];
-		foreach ($dsnItems as $name => $value)
-			$dsnparts[] = $name . '=' . $value;
-
-		$dsn = $engine . ':' . implode (';', $dsnparts);
-// echo 'DSN: ' . $dsn . "\n";
-
+		// build opts
 		$opts = [ ];
-
 		if (array_key_exists ('persistent', $args) && $args['persistent'])
 			$opts[PDO::ATTR_PERSISTENT] = true; // persistent connections
+		$engine = $args['engine'];
 
+		// open database
 		try
 		{
 			switch ($engine)
@@ -173,7 +216,8 @@ class dbCnxPool
 			case 'pgsql' :
 				$dsn .= ';user=' . $args['username'];
 				$dsn .= ';password=' . $args['passwd'];
-				$dsn .= ';port=' . 5432;
+				if (! isset ($args['port']) )
+					$dsn .= ';port=' . 5432;
 				$pdo = new PDO($dsn, null, null, $opts);
 				break;
 			case 'dblib' :
@@ -186,7 +230,7 @@ class dbCnxPool
 		catch (PDOException $e)
 		{
 			self::$errorCode = $e -> getCode();
-			self::$lastError = $e -> getMessage();
+			self::$lastError = $e -> getMessage() . ', dsn=' . $dsn;
 			return null;
 		}
 		$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); // Set Errorhandling to Exception
@@ -234,7 +278,7 @@ class dbCnxPool
 	public static function
 	closeAll (): void
 	{
-		foreach (self::dbLinks as $database => $dbLink)
+		foreach (self::$dbLinks as $database => $dbLink)
 			self::close($database);
 	}
 }
@@ -264,6 +308,8 @@ class fwpdo
 	private $sqls;
 
 	private $engine;
+
+	public $args;
 
 	// old syntax: 4 to 8 parms
 	// __construct($host, $username, $passwd, $database [,$engine[,$port [,$warn_channel [,$socket]]]])
@@ -331,6 +377,7 @@ class fwpdo
 
 		$this -> host = $args['host'];
 		$this -> pdo = dbCnxPool::getPDO($args);
+		$this -> args = $args;
 
 		// this is likely no transaction has been started
 		// but, due to connexion pool, it is not sure
@@ -340,7 +387,10 @@ class fwpdo
 		$this -> transactionCount = 0;
 
 		if ($this -> pdo == null)
+{
+//var_dump($args);
 			throw new fwpdoException(dbCnxPool::getLastError());
+}
 	}
 
 	static public function
@@ -697,7 +747,7 @@ return;
 			if ($this -> success)
 				return true;
 
-			throw new fwpdoException($this -> msg);
+			throw new fwpdoException($this -> shortmsg);
 		}
 		else
 			$this -> doRecord ($sql);
@@ -766,31 +816,6 @@ return;
 				$newArgs[$parm] = '';
 
 		return $newArgs;
-	}
-
-	public function
-	use (string $dbname): void
-	{
-		$sql = 'USE ' . $dbname;
-		$this -> executeSql ($sql, '', true);
-	}
-
-	public function
-	prepare (string $verb, array $parms): PDOstatement
-	{
-		switch ($verb)
-		{
-		case 'select' :
-			return $this -> prepareSelect($parms);
-		case 'update' :
-			return $this -> prepareUpdate($parms);
-		case 'insert' :
-			return $this -> prepareInsert($parms);
-		case 'delete' :
-			return $this -> prepareDelete($parms);
-		default :
-			throw new fwpdoException ('unknown statement: ' . $verb);
-		}
 	}
 
 	//--------------------------------------------------------------------
@@ -898,14 +923,6 @@ return;
 		if ($this -> num_rows() > 1)
 			throw new fwpdoException ('select1: mutiple results');
 		return $rows[0];
-	}
-
-	private function
-	prepareSelect (array $parms): PDOstatement
-	{
-		$sql = $this -> buildSelectRequest ($args);
-		$st = $this -> pdo -> prepare ($sql);
-		return $st;
 	}
 
 	/**
@@ -1297,14 +1314,6 @@ return;
 		return true;
 	}
 
-	private function
-	prepareDelete (array $parms): PDOstatement
-	{
-		$sql = $this -> buildDeleteRequest ($args);
-		$st = $this -> pdo -> prepare ($sql);
-		return $st;
-	}
-
 	// this is a new function, it does not implements compatibility mode with multiple args
 	// if it cannot delete 1 record (no record matches where clause for example), it will return an error
 	// this differs from the behaviour of delete()
@@ -1581,14 +1590,6 @@ return;
 		return true;
 	}
 
-	private function
-	prepareUpdate (array $parms): PDOstatement
-	{
-		$sql = $this -> buildUpdateRequest ($args);
-		$st = $this -> pdo -> prepare ($sql);
-		return $st;
-	}
-
 	public function
 	must_update (string $table, array $fields, $whereset, bool $trimall=false)
 	{
@@ -1696,14 +1697,6 @@ return;
 		$sql = $this -> buildInsertRequest ($args);
 		
 		return $this -> insert_sql ($sql);
-	}
-
-	private function
-	prepareInsert (array $parms): PDOstatement
-	{
-		$sql = $this -> buildInsertRequest ($args);
-		$st = $this -> pdo -> prepare ($sql);
-		return $st;
 	}
 
 	private function
@@ -1901,5 +1894,7 @@ return;
 		return $sql;
 	}
 	public function setHandler() { }
+	public function setTemporaryHandler() { }
+	public function resetTemporaryHandler() { }
 }
 ?>
