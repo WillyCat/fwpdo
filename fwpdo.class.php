@@ -68,6 +68,7 @@ Date        Ver   Who  Change
 2020-12-03  1.20  FHO  fixed issue in dbCnxPool::closeAll
                        pgsql: requested port was overriden with default port
                        new class dsn
+2021-09-29  1.21  FHO  Now returns ints as ints, no longer as strings
 
 Known issues
 --------------
@@ -235,6 +236,10 @@ class dbCnxPool
 		}
 		$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); // Set Errorhandling to Exception
 
+		// 1.21
+		$pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+		$pdo->setAttribute(PDO::ATTR_STRINGIFY_FETCHES, false);
+
 		self::$dbLinks[$args['database']] = $args;
 		self::$dbLinks[$args['database']]['dsn'] = $dsn;
 		self::$dbLinks[$args['database']]['pdo'] = $pdo;
@@ -396,7 +401,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.19';
+		return '1.21';
 	}
 
 	//==================================================
