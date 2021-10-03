@@ -69,6 +69,7 @@ Date        Ver   Who  Change
                        pgsql: requested port was overriden with default port
                        new class dsn
 2021-09-29  1.21  FHO  Now returns ints as ints, no longer as strings
+2021-10-02  1.22  FHO  Introduced fwpdo::stats
 
 Known issues
 --------------
@@ -315,6 +316,7 @@ class fwpdo
 	private $engine;
 
 	public $args;
+	public $stats;
 
 	// old syntax: 4 to 8 parms
 	// __construct($host, $username, $passwd, $database [,$engine[,$port [,$warn_channel [,$socket]]]])
@@ -332,6 +334,7 @@ class fwpdo
 	public function
 	__construct()
 	{
+		$this -> stats = [ ];
 		switch (func_num_args())
 		{
 		case 4 : // f($host, $username, $passwd, $database)
@@ -401,7 +404,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.21';
+		return '1.22';
 	}
 
 	//==================================================
@@ -640,6 +643,12 @@ class fwpdo
 		$this -> sql = $sql;
 		$this -> time_start = microtime(true);
 		$this -> success = false;
+
+		$cmd = strtoupper(substr ($sql, 0, 3));
+		if (array_key_exists ($cmd, $this -> stats))
+			$this -> stats[$cmd]++;
+		else
+			$this -> stats[$cmd] = 1;
 	}
 
 	/**
