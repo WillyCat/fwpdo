@@ -70,6 +70,7 @@ Date        Ver   Who  Change
                        new class dsn
 2021-09-29  1.21  FHO  Now returns ints as ints, no longer as strings
 2021-10-02  1.22  FHO  Introduced fwpdo::stats
+2022-07-17  1.23  FHO  setCharset now accepts a second (optional) arg for collate
 
 Known issues
 --------------
@@ -404,7 +405,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.22';
+		return '1.23';
 	}
 
 	//==================================================
@@ -529,10 +530,10 @@ class fwpdo
 	// 'x IS NULL'              ==> WHERE x IS NULL
 	// array('x > 3', 'y > 5')  ==> WHERE x > 3 AND y > 5
 	// array('x' => 3)          ==> WHERE x = 3
-	// array('x' => 3, 'y > 5', 'x' => [ 'op'=>'<>', 'val'=>'10' ]
+	// array('x' => 3, 'y > 5', 'z' => [ 'op'=>'<>', 'value'=>'10' ]
 	//                          ==> WHERE x = 3 AND y > 5 AND z <> 10
 	// 'x' => [ 'a', 'b' ]      ==> WHERE x IN ('a', 'b')
-	// 'x' => [ 'op'=>'>', 12 ] ==> WHERE x > 12
+	// 'x' => [ 'op'=>'>', 'value' => 12 ] ==> WHERE x > 12
 
 	function
 	buildWhereStatement ($whereparm, $boolop = 'AND'): string
@@ -692,14 +693,18 @@ return;
 	 * @return bool true if success, false if failure
 	 */
 	public function
-	setCharset (string $charset)
+	setCharset (string $charset, string $collate = ''): bool
 	{
 		// [1.8] mysql recognizes 'utf8', not 'utf-8'
 		$charset = strtolower ($charset);
 		if ($charset == 'utf-8')
 			$charset = 'utf8';
 
-		return $this -> executeSql ('SET NAMES ' . $charset);
+		$sqlStatement = 'SET NAMES ' . $charset;
+		if ($collate != '')
+			$sqlStatement .= ' COLLATE ' . $collate;
+
+		return $this -> executeSql ($sqlStatement);
 	}
 
 	/**
@@ -729,13 +734,11 @@ return;
 	 *
 	 * @param string $sql SQL statement to execute
 	 * @param bool $forceExec (opt) Execute in read-only mode (default: do not execute)
-	 * @return string|bool if bool, true is succes, false is failure
-	 *                     if string, '' is success, else is error message
-	 * @todo fix inconsistencies in return type
+	 * @return bool true is succes, false is failure
 	 * @throws fwpdoException
 	 */
 	public function
-	executeSql (string $sql, string $dummy='', bool $forceExec = false)
+	executeSql (string $sql, string $dummy='', bool $forceExec = false): bool
 	{
 		if ($this -> recording)
 			$this -> doRecord ($sql);
@@ -755,8 +758,9 @@ return;
 				$this->shortmsg = $e -> getMessage();
 				$this->msg = $sql . ': ' . $e -> getMessage();
 			}
-			// finally
-			$this -> stopSql ();
+			finally {
+				$this -> stopSql ();
+			}
 
 			if ($this -> success)
 				return true;
@@ -769,7 +773,7 @@ return;
 	}
 
 	private function
-	must_executeSql (string $sql)
+	must_executeSql (string $sql): void
 	{
 		try {
 			$this -> executeSql($sql);
@@ -790,7 +794,6 @@ return;
 			$this -> success = false;
 			$st = $this->pdo->query($sql); // returns a PDOStatement
 			$this->nrows = $st -> rowCount();
-			$arr = array();
 			$arr = $st -> fetchAll(PDO::FETCH_ASSOC);
 			$this -> success = true;
 		}
