@@ -71,7 +71,8 @@ Date        Ver   Who  Change
 2021-09-29  1.21  FHO  Now returns ints as ints, no longer as strings
 2021-10-02  1.22  FHO  Introduced fwpdo::stats
 2022-07-17  1.23  FHO  setCharset now accepts a second (optional) arg for collate
-2022-12-04  1.24  FHO  'having' caused malformed queries
+2022-09-02  1.24  FHO  dateTime now accepts an optional arg: timestamp
+2022-12-04  1.25  FHO  'having' caused malformed queries
 
 Known issues
 --------------
@@ -406,7 +407,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.24';
+		return '1.25';
 	}
 
 	//==================================================
@@ -441,10 +442,10 @@ class fwpdo
 	 * @return string SQL formatted date time
 	 */
 	public function
-	dateTime(): string
+	dateTime(int $timestamp = null): string
 	{
 		date_default_timezone_set('Europe/Paris');
-		return date("Y-m-d H:i:s");
+		return date("Y-m-d H:i:s", $timestamp);
 	}
 
 	// format a field value (add quotes, escape etc.)

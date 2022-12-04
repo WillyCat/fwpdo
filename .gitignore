@@ -1,2 +1,2 @@
-**/bak
-**/old
+.gitignore
+publish.sh
