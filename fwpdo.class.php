@@ -1083,8 +1083,8 @@ return;
 			$fromStatement,
 			$joinStatements,
 			$whereStatement,
-			$havingStatement,
 			$groupByStatement,
+			$havingStatement,
 			$orderByStatement,
 			$orderStatement,
 			$limitStatement  );
