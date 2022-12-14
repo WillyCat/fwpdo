@@ -73,6 +73,7 @@ Date        Ver   Who  Change
 2022-07-17  1.23  FHO  setCharset now accepts a second (optional) arg for collate
 2022-09-02  1.24  FHO  dateTime now accepts an optional arg: timestamp
 2022-12-04  1.25  FHO  'having' caused malformed queries
+2022-12-14  1.26  FHO removal of dynamic properties, now deprecated (php 8.2)
 
 Known issues
 --------------
@@ -97,20 +98,13 @@ class fwpdoException extends Exception
 
 class dsn
 {
-	/*
 	// PHP 8
-	private string $engine;
-	private string $database;
-	private string $host;
-	private string $socket;
-	private string $port;
-	*/
-	// PHP 7
-	private $engine;
-	private $database;
-	private $host;
-	private $socket;
-	private $port;
+	private string $engine = '';
+	private string $database = '';
+	private string $host = '';
+	private string $socket = '';
+	private int $port = 0;
+	private string $dsn = '';
 
 	public function __construct (array $args)
 	{
@@ -120,11 +114,17 @@ class dsn
 			if (!array_key_exists ($parameter, $args) || $args[$parameter] == '' || is_null($args[$parameter]) )
 				throw new Exception ($parameter . ' is mandatory');
 
-		foreach ([ 'engine', 'host', 'port', 'socket', 'database' ] as $parameter)
+		foreach ([ 'engine', 'host', 'socket', 'database' ] as $parameter)
 			if (array_key_exists ($parameter, $args))
 				$this -> $parameter = $args[$parameter];
 			else
 				$this -> $parameter = '';
+
+		foreach ([ 'port' ] as $parameter)
+			if (array_key_exists ($parameter, $args))
+				$this -> $parameter = $args[$parameter];
+			else
+				$this -> $parameter = 0;
 
 		if (!in_array ($this -> engine, [ 'mysql', 'pgsql', 'mssql' ] ))
 			throw new Exception ('engine not supported: [' . $this -> engine . ']');
@@ -164,9 +164,9 @@ class dsn
 
 class dbCnxPool
 {
-	private static $dbLinks;
-	private static $lastError;	// message
-	private static $errorCode;	// code
+	private static ?array $dbLinks = null;
+	private static string $lastError = '';	// message
+	private static int $errorCode = 0;	// code
 
 	/**
 	 * Constructeur de la classe
@@ -294,32 +294,35 @@ class dbCnxPool
 
 class fwpdo
 {
-	private $host;
-	private $database;
-	private $transactionCount;
+	private string $host = '';
+	private string $database = '';
+	private string $engine = '';
 
-	private $timestart;
-	private $time_end;
+	private int $transactionCount = 0;
 
-	public $sql;
-	public $success;
-	public $nrows;
-	public $duration;
+	private float $time_start = 0.0;
+	private float $time_end = 0.0;
+	public float $duration = 0.0;
 
-	private $errorCode;	// error code
-	public $shortmsg;	// error message without SQL statement
+	public string $sql = '';
+	public bool $success = true;
+	public int $nrows = 0;
+
+	private int $errorCode = 0;	// error code
+	public string $shortmsg= '';	// error message without SQL statement
 
 	// Read only mode
-	private $readOnly;
+	private bool $readOnly = false;
 
 	// Recording
-	private $recording;
-	private $sqls;
+	private bool $recording = false;
+	private array $sqls = [ ];
 
-	private $engine;
+	public array $args = [ ];
+	public array $stats = [ ];
 
-	public $args;
-	public $stats;
+	private ?PDO $pdo = null;
+	public string $msg = '';
 
 	// old syntax: 4 to 8 parms
 	// __construct($host, $username, $passwd, $database [,$engine[,$port [,$warn_channel [,$socket]]]])
@@ -337,7 +340,6 @@ class fwpdo
 	public function
 	__construct()
 	{
-		$this -> stats = [ ];
 		switch (func_num_args())
 		{
 		case 4 : // f($host, $username, $passwd, $database)
@@ -398,16 +400,16 @@ class fwpdo
 		$this -> transactionCount = 0;
 
 		if ($this -> pdo == null)
-{
-//var_dump($args);
+		{
+		//var_dump($args);
 			throw new fwpdoException(dbCnxPool::getLastError());
-}
+		}
 	}
 
 	static public function
 	getVersion(): string
 	{
-		return '1.25';
+		return '1.26';
 	}
 
 	//==================================================
@@ -1895,8 +1897,8 @@ return;
 	public function on_error ($expected_behaviour) { return $this -> onError($expected_behaviour); }
 	public function get_last_error () { return $this -> getLastError(); }
 	//public function datetime () { return $this -> dateTime(); }
-	public function get_database () { return $this -> getDatabase(); }
-	public function num_rows () { return $this -> numRows(); }
+	public function get_database():string { return $this -> getDatabase(); }
+	public function num_rows():int { return $this -> numRows(); }
 	public function set_charset ($charset) { return $this -> setCharset($charset); }
 	public function must_delete ($table, $whereset) { try { $this -> deleteOrDie($table, $whereset); } catch (Exception $e) { die($e -> getMessage()); } }
 	public function delete_sql ($sql, $dummy='') { return $this -> deleteSql ($sql); }
