@@ -234,7 +234,7 @@ class dbCnxPool
 		}
 		catch (PDOException $e)
 		{
-			self::$errorCode = $e -> getCode();
+			self::$errorCode = (int)$e -> getCode();
 			self::$lastError = $e -> getMessage() . ', dsn=' . $dsn;
 			return null;
 		}
