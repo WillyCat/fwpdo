@@ -73,7 +73,10 @@ Date        Ver   Who  Change
 2022-07-17  1.23  FHO  setCharset now accepts a second (optional) arg for collate
 2022-09-02  1.24  FHO  dateTime now accepts an optional arg: timestamp
 2022-12-04  1.25  FHO  'having' caused malformed queries
-2022-12-14  1.26  FHO removal of dynamic properties, now deprecated (php 8.2)
+2022-12-14  1.26  FHO  removal of dynamic properties, now deprecated (php 8.2)
+2023-01-15  1.27  FHO  select1() accepts a query
+                       count() accepts a query
+2023-02-25  1.28  FHO  quote() now throws an error if parameter cannot be handled
 
 Known issues
 --------------
@@ -758,7 +761,7 @@ return;
 			}
 			catch (PDOException $e)
 			{
-				$this->errorCode = $e -> getCode();
+				$this->errorCode = (int)$e -> getCode();
 				$this->shortmsg = $e -> getMessage();
 				$this->msg = $sql . ': ' . $e -> getMessage();
 			}
@@ -803,7 +806,7 @@ return;
 		}
 		catch (PDOException $e)
 		{
-			$this->errorCode = $e -> getCode();
+			$this->errorCode = (int)$e -> getCode();
 			$this->shortmsg = $e -> getMessage();
 			$this->msg = $sql . ': ' . $e -> getMessage();
 			$arr = '';
@@ -845,10 +848,13 @@ return;
 
 	/**
 	 * @throws fwpdoException
+	 * from can be a table name --> count('mytable')
+	 * or a query               --> count('select * from mytable where mycolumn=12')
+	 * or a pdoparm             --> count([ 'table' => 'mytable', 'where' => [ 'mycolumn' => 12 ] ])
 	 */
 
 	public function
-	count ($fromparm, $whereparm = '', $joinparm = '', $dummy=''): int
+	count (string|array $fromparm, string|array $whereparm = '', string|array $joinparm = '', $dummy=''): int
 	{
 		if (is_array ($fromparm))	// new syntax
 			$args = $fromparm;
@@ -856,7 +862,10 @@ return;
 		{
 			$args = array();
 			$args['where'] = $whereparm;
-			$args['from']  = $fromparm;
+			if (strpos ($fromparm, ' ') === false)
+				$args['from']  = $fromparm;
+			else
+				$args['from']  = '(' . $fromparm . ') SUBQUERY';
 			$args['join']  = $joinparm;
 			$args['boolop']  = 'AND';
 		}
@@ -936,7 +945,7 @@ return;
 	 * @throws fwpdoException
 	 */
 	public function
-	select1 (array $pdoparms): ?array
+	select1 (string|array $pdoparms): ?array
 	{
 		$rows = $this -> select ($pdoparms);
 		if ($this -> num_rows () == 0)
@@ -1816,6 +1825,9 @@ return;
 		case 'bool' :
 		case 'boolean' :
 			return ($s ? 'TRUE' : 'FALSE');
+
+		case 'array' :
+			throw new Exception('cannot format an array');
 
 		default: 
 			//tracelog ('quote(): parm is expected as string, '.gettype($s).' provided: '.tracelog_dump($s));
