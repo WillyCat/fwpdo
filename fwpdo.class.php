@@ -77,6 +77,7 @@ Date        Ver   Who  Change
 2023-01-15  1.27  FHO  select1() accepts a query
                        count() accepts a query
 2023-02-25  1.28  FHO  quote() now throws an error if parameter cannot be handled
+2023-09-15  1.29  FHO  count() was returning erroneous values when request was using GROUP BY statement
 
 Known issues
 --------------
@@ -97,6 +98,24 @@ added limit for update
 
 class fwpdoException extends Exception
 {
+}
+
+class fwpdoStatement extends PDOStatement
+{
+	private PDOStatement $st;
+	private fwpdo $pdo;
+
+	public function
+	__construct (fwpdo &$pdo, PDOStatement $st)
+	{
+		$this -> pdo = $pdo;
+		$this -> st = $st;
+	}
+
+	public function
+	execute (?array $values = null): bool
+	{
+	}
 }
 
 class dsn
@@ -412,7 +431,24 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.26';
+		return '1.29';
+	}
+
+	//==================================================
+	//
+	//             PREPARED STATEMENTS
+	//
+	//==================================================
+
+	public function
+	prepareSelect (string|array $pdoparms): ?fwpdoStatement
+	{
+		$sql = $this -> buildSelectRequest($pdoparms);
+		if ($sql == '')
+			return null;
+
+		$st = $this->pdo->prepare($sql); // returns a PDOStatement
+		return new fwpdoStatement ($st);
 	}
 
 	//==================================================
@@ -858,7 +894,7 @@ return;
 	{
 		if (is_array ($fromparm))	// new syntax
 			$args = $fromparm;
-		else
+		else // old syntax
 		{
 			$args = array();
 			$args['where'] = $whereparm;
@@ -869,16 +905,27 @@ return;
 			$args['join']  = $joinparm;
 			$args['boolop']  = 'AND';
 		}
+
+/*
 		$args['select'] = 'COUNT(*) NB';
 		$args['limit']   = '';
 		$args['orderby'] = '';
 		$args['order']   = '';
 
 		$rows = $this -> select ($args);
-//tracelog ('[fwpdo::count] ' . $this->sql);
 		if (!$rows || $rows == '' || count($rows) < 1)
 			throw new fwpdoException('No result');
+
 		return $rows[0]['NB'];
+*/
+		$args['limit']   = '';
+		$args['orderby'] = '';
+		$args['order']   = '';
+
+		$sqlSelect = $this -> buildSelectRequest($args);
+		$sqlCount = 'SELECT COUNT(*) FWCOUNT FROM (' . $sqlSelect . ') XX';
+		$rows = $this->fetch ($sqlCount);
+		return $rows[0]['FWCOUNT'];
 	}
 
 	public function
