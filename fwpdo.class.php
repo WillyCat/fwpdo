@@ -78,6 +78,8 @@ Date        Ver   Who  Change
                        count() accepts a query
 2023-02-25  1.28  FHO  quote() now throws an error if parameter cannot be handled
 2023-09-15  1.29  FHO  count() was returning erroneous values when request was using GROUP BY statement
+2024-01-24  1.30  FHO  concatStrings() would raise an error if an array of strings was found when a string was expected
+                       changed so that we concatenate strings no matter the level
 
 Known issues
 --------------
@@ -431,7 +433,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.29';
+		return '1.30';
 	}
 
 	//==================================================
@@ -1186,7 +1188,7 @@ return;
 	 * @throws fwpdoException
 	 */
 	private function
-	buildTablesList ($tablesParm): string
+	buildTablesList (string|array $tablesParm): string
 	{
 		if (is_array ($tablesParm))
 			$tables = implode (',' , $tablesParm );
@@ -1201,7 +1203,7 @@ return;
 	}
 
 	private function
-	buildFromStatement ($fromParm): string
+	buildFromStatement (string|array $fromParm): string
 	{
 		$tables = $this -> buildTablesList($fromParm);
 		if ($tables != '')
@@ -1213,13 +1215,13 @@ return;
 	}
 
 	private function
-	buildJoinStatements ($joinParm): string
+	buildJoinStatements (string|array $joinParm): string
 	{
 		return $this -> concatStrings ($joinParm);
 	}
 
 	private function
-	buildOrderByStatement($orderParm): string
+	buildOrderByStatement(string|array $orderParm): string
 	{
 		if (is_array($orderParm))
 			$orderItems = $orderParm;
@@ -1241,7 +1243,7 @@ return;
 	}
 
 	private function
-	buildGroupByStatement ($groupparm): string
+	buildGroupByStatement (string|array $groupparm): string
 	{
 		if (!is_array($groupparm))
 			$grouparr = array($groupparm);
@@ -1281,7 +1283,7 @@ return;
 	// pgsql => 'OFFSET 50 FETCH NEXT 10 ROWS ONLY'
 
 	private function
-	buildLimitStatement ($limitParm, int $maxParts): string
+	buildLimitStatement (string|int|array $limitParm, int $maxParts): string
 	{
 		if (!is_array ($limitParm))
 		{
@@ -1925,7 +1927,11 @@ return;
 		foreach ($parms as $parm)
 		{
 			if (is_array ($parm))
-				$result .= implode (' ', $parm);
+				//$result .= implode (' ', $parm);
+			{
+				foreach ($parm as $arrayitem)
+					$result .= ' ' . $this -> concatStrings($arrayitem);//implode (' ', $parm);
+			}
 			else
 				$result .= $parm;
 			$result .= ' ';
