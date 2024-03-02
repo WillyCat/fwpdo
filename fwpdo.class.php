@@ -80,6 +80,8 @@ Date        Ver   Who  Change
 2023-09-15  1.29  FHO  count() was returning erroneous values when request was using GROUP BY statement
 2024-01-24  1.30  FHO  concatStrings() would raise an error if an array of strings was found when a string was expected
                        changed so that we concatenate strings no matter the level
+2024-01-25  1.31  FHO  for insert(), now possible to use 'into' for table name (same as 'from' but more sql syntax alike)
+2024-03-02  1.32  FHO  added counters
 
 Known issues
 --------------
@@ -347,6 +349,7 @@ class fwpdo
 
 	private ?PDO $pdo = null;
 	public string $msg = '';
+	public array $counters = [ ];
 
 	// old syntax: 4 to 8 parms
 	// __construct($host, $username, $passwd, $database [,$engine[,$port [,$warn_channel [,$socket]]]])
@@ -386,6 +389,7 @@ class fwpdo
 
 		$this -> recording = false;
 		$this -> readOnly = false;
+		$this -> resetCounters();
 
 		// set default values for unset parms
 		$args = self::addMissing($args, [ 'engine' ], 'mysql' );
@@ -430,10 +434,22 @@ class fwpdo
 		}
 	}
 
+	public function
+	resetCounters (): void
+	{
+		$this -> counters = [
+			'SEL' => 0,
+			'INS' => 0,
+			'UPD' => 0,
+			'DEL' => 0,
+			'TRA' => 0
+		];
+	}
+
 	static public function
 	getVersion(): string
 	{
-		return '1.30';
+		return '1.32';
 	}
 
 	//==================================================
@@ -1042,6 +1058,8 @@ return;
 		if ($sql == '')
 			return '';
 
+		$this -> counters['SEL']++;
+
 		$rows = $this->fetch ($sql);
 		return $rows;
 	}
@@ -1389,6 +1407,7 @@ return;
 		if ($sql == '')
 			throw new fwpdoException('failed to build SQL statement');
 
+		$this -> counters['DEL']++;
 		$this -> executeSql ($sql);
 		return true;
 	}
@@ -1579,6 +1598,7 @@ return;
 
 		if ($this -> transactionCount == 1)
 		{
+			$this -> counters['TRA']++;
 			$this -> sql = 'COMMIT';
 			try
 			{
@@ -1664,6 +1684,7 @@ return;
 		if ($sql == '')
 			throw new fwpdoException('empty SQL');
 
+		$this -> counters['UPD']++;
 		$this -> executeSql ($sql);
 
 		return true;
@@ -1684,6 +1705,7 @@ return;
 	public function
 	update_sql (string $sql, bool $trimall = false, string $dummy=''): bool
 	{
+		$this -> counters['UPD']++;
 		$this -> executeSql ($sql);
 		return true;
 	}
@@ -1792,6 +1814,8 @@ return;
 	public function
 	insert_sql (string $sql, string $dummy=''): int
 	{
+		$this -> counters['INS']++;
+
 		if (!$this -> executeSql($sql))
 			return 0;
 
@@ -1800,7 +1824,7 @@ return;
 
 	/**
 	 * Builds and INSERT statement
-	 * @param array $args 'table', 'from', 'fields', 'where', 'trimall'
+	 * @param array $args 'table', 'from'/'into', 'fields', 'where', 'trimall'
 	 * @return string
 	 */
 	private function
@@ -1809,6 +1833,12 @@ return;
 		// Create missing entries, if any
 
 		$args = $this -> addMissing ($args, [ 'from', 'fields' ] );
+
+		if (array_key_exists ('into', $args) && !array_key_exists ('from', $args))
+		{
+			$args['from'] = $args['into'];
+			unset ($args['into']);
+		}
 
 		$tables  = $this -> buildTablesList ($args['from']);
 		$fieldNames = $this -> buildFieldNamesList ($args['fields']);
