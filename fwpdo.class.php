@@ -501,7 +501,7 @@ class fwpdo
 	 * @return string SQL formatted date time
 	 */
 	public function
-	dateTime(int $timestamp = null): string
+	dateTime(?int $timestamp = null): string
 	{
 		date_default_timezone_set('Europe/Paris');
 		return date("Y-m-d H:i:s", $timestamp);
@@ -1881,7 +1881,7 @@ return;
 	 * @return int ID or 0 if no INSERT performed
 	 */
 	public function
-	lastInsertId (string $name = null): int
+	lastInsertId (?string $name = null): int
 	{
 		return $this -> pdo -> lastInsertId ($name);
 	}
