@@ -82,6 +82,8 @@ Date        Ver   Who  Change
                        changed so that we concatenate strings no matter the level
 2024-01-25  1.31  FHO  for insert(), now possible to use 'into' for table name (same as 'from' but more sql syntax alike)
 2024-03-02  1.32  FHO  added counters
+2024-12-01  1.33  FHO  php 8.4.1
+2025-03-09  1.34  FHO  select11
 
 Known issues
 --------------
@@ -449,7 +451,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.32';
+		return '1.34';
 	}
 
 	//==================================================
@@ -1018,6 +1020,17 @@ return;
 		if ($this -> num_rows() > 1)
 			throw new fwpdoException ('select1: mutiple results');
 		return $rows[0];
+	}
+
+	// Returns the value of the single field of a single record
+	public function
+	select11 (string|array $pdoparms): mixed
+	{
+		$row = $this -> select1($pdoparms);
+		if (is_null ($row))
+			return null;
+		else
+			return array_pop($row);
 	}
 
 	/**
