@@ -84,6 +84,7 @@ Date        Ver   Who  Change
 2024-03-02  1.32  FHO  added counters
 2024-12-01  1.33  FHO  php 8.4.1
 2025-03-09  1.34  FHO  select11
+2025-05-09  1.35  FHO  retrieve database engine version
 
 Known issues
 --------------
@@ -1075,6 +1076,13 @@ return;
 
 		$rows = $this->fetch ($sql);
 		return $rows;
+	}
+
+	public function
+	version(): string
+	{
+		$arr = $this -> fetch ('SELECT version() AS version');
+		return $arr[0]['version'];
 	}
 
 	/**
