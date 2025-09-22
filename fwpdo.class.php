@@ -85,6 +85,10 @@ Date        Ver   Who  Change
 2024-12-01  1.33  FHO  php 8.4.1
 2025-03-09  1.34  FHO  select11
 2025-05-09  1.35  FHO  retrieve database engine version
+2025-08-16  1.36  FHO  slow queries: define a threshold, queries longer will call a callback
+2025-09-13  1.37  FHO  accept join for delete
+                       when performing transactions within transactions, commit() of the outer transaction
+                       will issue a sql rollback if an inner transaction called rollback()
 
 Known issues
 --------------
@@ -328,6 +332,7 @@ class fwpdo
 	private string $engine = '';
 
 	private int $transactionCount = 0;
+	private bool $transactionFailure = false;
 
 	private float $time_start = 0.0;
 	private float $time_end = 0.0;
@@ -346,6 +351,10 @@ class fwpdo
 	// Recording
 	private bool $recording = false;
 	private array $sqls = [ ];
+
+	// Slow queries
+	private int $slow_query_threshold;
+	private string $slow_query_callback;
 
 	public array $args = [ ];
 	public array $stats = [ ];
@@ -393,6 +402,8 @@ class fwpdo
 		$this -> recording = false;
 		$this -> readOnly = false;
 		$this -> resetCounters();
+		$this -> slow_query_threshold = 0;
+		$this -> slow_query_callback = '';
 
 		// set default values for unset parms
 		$args = self::addMissing($args, [ 'engine' ], 'mysql' );
@@ -429,6 +440,7 @@ class fwpdo
 		// it will remain open
 		// (it should be rollbacked)
 		$this -> transactionCount = 0;
+		$this -> transactionFailure = false;
 
 		if ($this -> pdo == null)
 		{
@@ -452,7 +464,7 @@ class fwpdo
 	static public function
 	getVersion(): string
 	{
-		return '1.34';
+		return '1.37';
 	}
 
 	//==================================================
@@ -724,7 +736,27 @@ class fwpdo
 	{
 		$this -> time_end   = microtime(true);
 		$this -> duration   = $this -> time_end - $this -> time_start;
+		if ($this -> slow_query_threshold > 0
+		&&  $this -> duration > $this -> slow_query_threshold
+		&&  function_exists ($this -> slow_query_callback))
+		{
+			call_user_func_array ($this -> slow_query_callback, [ $this -> sql, $this -> duration ]);
+		}
 		$this -> record();
+	}
+
+	public function
+	setSlowQueriesCallback (int $threshold, string $callback): void
+	{
+		$this -> slow_query_threshold = $threshold;
+		$this -> slow_query_callback  = $callback;
+	}
+
+	public function
+	resetSlowQueriesCallback (): void
+	{
+		$this -> slow_query_threshold = 0;
+		$this -> slow_query_callback  = '';
 	}
 
 	/**
@@ -1413,11 +1445,11 @@ return;
 	 * as an error.
 	 */
 	public function
-	delete ()
+	delete (): bool
 	{
 		$num_args = func_num_args();
 
-		$opts = [  'from', 'where', 'limit' ] ;
+		$opts = [  'from', 'where', 'limit', 'join' ] ;
 
 		if ($num_args  == 1)	// new syntax
 			$args = $this -> addMissing (func_get_arg(0), $opts);
@@ -1491,11 +1523,23 @@ return;
 	private function
 	buildDeleteRequest (array $args): string
 	{
-		$fromStatement    = $this -> buildFromStatement ($args['from']);
-		$whereStatement = $this -> buildWhereStatement ($args['where']);
-		$limitStatement  = $this -> buildLimitStatement ($args['limit'], 1);
+		if (is_array ($args['from']))
+		{
+			if (count ($args['from']) > 1)
+				throw new fwpdoException ('Only one table should be provided for delete');
+			if (count ($args['from']) < 1)
+				throw new fwpdoException ('Missing table');
+			$table = $args['from'][0];
+		}
+		else
+			$table = $args['from'];
 
-		$sql = $this -> concatStrings ( 'DELETE', $fromStatement, $whereStatement , $limitStatement );
+		$fromStatement   = $this -> buildFromStatement ($args['from']);
+		$whereStatement  = $this -> buildWhereStatement ($args['where']);
+		$limitStatement  = $this -> buildLimitStatement ($args['limit'], 1);
+		$joinStatements  = $this -> buildJoinStatements ($args['join']);
+
+		$sql = $this -> concatStrings ( 'DELETE', $table, $fromStatement, $joinStatements, $whereStatement, $limitStatement );
 
 		return $sql;
 	}
@@ -1594,6 +1638,7 @@ return;
 		{
 			$this -> pdo -> beginTransaction();
 			$this -> sql = 'START TRANSACTION';
+			$this -> transactionFailure = false;
 		}
 	}
 
@@ -1619,19 +1664,24 @@ return;
 
 		if ($this -> transactionCount == 1)
 		{
-			$this -> counters['TRA']++;
-			$this -> sql = 'COMMIT';
-			try
+			if ($this -> transactionFailure)
+				$this -> rollback();
+			else
 			{
-				if (!$this -> pdo -> commit())
+				$this -> counters['TRA']++;
+				$this -> sql = 'COMMIT';
+				try
+				{
+					if (!$this -> pdo -> commit())
+						throw new fwpdoException('commit failed');
+				}
+				catch (PDOException $e)
+				{
 					throw new fwpdoException('commit failed');
+				}
+				$this -> transactionCount = 0;
+				return true;
 			}
-			catch (PDOException $e)
-			{
-				throw new fwpdoException('commit failed');
-			}
-			$this -> transactionCount = 0;
-			return true;
 		}
 
 		// if transactionCount == 0, no transaction has been started
