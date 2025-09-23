@@ -89,6 +89,8 @@ Date        Ver   Who  Change
 2025-09-13  1.37  FHO  accept join for delete
                        when performing transactions within transactions, commit() of the outer transaction
                        will issue a sql rollback if an inner transaction called rollback()
+2025-09-22  1.38  FHO  dsn now accepts optional charset
+                       new: setPrepareMode('no' | 'emulated' | 'native' )
 
 Known issues
 --------------
@@ -138,6 +140,7 @@ class dsn
 	private string $socket = '';
 	private int $port = 0;
 	private string $dsn = '';
+	private string $charset = '';
 
 	public function __construct (array $args)
 	{
@@ -147,7 +150,7 @@ class dsn
 			if (!array_key_exists ($parameter, $args) || $args[$parameter] == '' || is_null($args[$parameter]) )
 				throw new Exception ($parameter . ' is mandatory');
 
-		foreach ([ 'engine', 'host', 'socket', 'database' ] as $parameter)
+		foreach ([ 'engine', 'host', 'socket', 'database', 'charset' ] as $parameter)
 			if (array_key_exists ($parameter, $args))
 				$this -> $parameter = $args[$parameter];
 			else
@@ -179,12 +182,16 @@ class dsn
 		if (!($this -> engine == 'dblib' && $this -> database == '<default>'))
 			$dsnItems['dbname'] = $this -> database;
 
-		foreach ([ 'host', 'port' ] as $parameter)
-			if (isset ($this -> $parameter))
+		foreach ([ 'host', 'charset' ] as $parameter)
+			if ($this -> $parameter != '')
 				$dsnItems[$parameter] = $this -> $parameter;
 
-		if (isset ($args['socket']))
-			$dsnItems['unix_socket'] = $args['socket'];
+		foreach ([ 'port' ] as $parameter)
+			if ($this -> $parameter != 0)
+				$dsnItems[$parameter] = $this -> $parameter;
+
+		if (isset ($this -> socket) )
+			$dsnItems['unix_socket'] = $this -> socket;
 
 		$dsnparts = [ ];
 		foreach ($dsnItems as $name => $value)
@@ -325,6 +332,13 @@ class dbCnxPool
 	}
 }
 
+enum fwpdoPrepareMode
+{
+	case FWPDO_PREPARE_NO;
+	case FWPDO_PREPARE_EMULATED;
+	case FWPDO_PREPARE_NATIVE;
+}
+
 class fwpdo
 {
 	private string $host = '';
@@ -362,6 +376,9 @@ class fwpdo
 	private ?PDO $pdo = null;
 	public string $msg = '';
 	public array $counters = [ ];
+
+	private fwpdoPrepareMode $prepareMode = fwpdoPrepareMode::FWPDO_PREPARE_NO;
+	private array $params = [ ];
 
 	// old syntax: 4 to 8 parms
 	// __construct($host, $username, $passwd, $database [,$engine[,$port [,$warn_channel [,$socket]]]])
@@ -481,7 +498,13 @@ class fwpdo
 			return null;
 
 		$st = $this->pdo->prepare($sql); // returns a PDOStatement
-		return new fwpdoStatement ($st);
+		return new fwpdoStatement ($this, $st);
+	}
+
+	public function
+	setPrepareMode (fwpdoPrepareMode $prepareMode): void
+	{
+		$this -> prepareMode = $prepareMode;
 	}
 
 	//==================================================
@@ -528,15 +551,21 @@ class fwpdo
 	formatFieldValue ($fieldValue, bool $trimall = false): string
 	{
 		if (is_null($fieldValue))
-			$str = 'NULL';
-		else
-		{
-			if ($trimall)
-				$fieldvalue = trim($fieldvalue);
-			$str = $this->quote($fieldValue) ;
-		}
+			return 'NULL';
 
-		return $str;
+		if ($trimall)
+			$fieldValue = trim($fieldValue);
+
+		switch ($this -> prepareMode)
+		{
+		case fwpdoPrepareMode::FWPDO_PREPARE_EMULATED :
+		case fwpdoPrepareMode::FWPDO_PREPARE_NATIVE :
+			$paramName = 'p' . (count($this -> params) + 1);
+			$this -> params[$paramName] = $fieldValue;
+			return ':' . $paramName;
+		case fwpdoPrepareMode::FWPDO_PREPARE_NO :
+			return $this -> quote ($fieldValue);
+		}
 	}
 
 	// format a field name
@@ -882,15 +911,25 @@ return;
 	 * @throws fwpdoException
 	 */
 	private function
-	fetch (string $sql)
+	fetch (string $sql): array
 	{
 		$this -> startSql ($sql);
 		try
 		{
 			$this -> success = false;
-			$st = $this->pdo->query($sql); // returns a PDOStatement
-			$this->nrows = $st -> rowCount();
+			switch ($this -> prepareMode)
+			{
+			case fwpdoPrepareMode::FWPDO_PREPARE_NO :
+				$st = $this->pdo->query($sql); // returns a PDOStatement
+				break;
+			case fwpdoPrepareMode::FWPDO_PREPARE_EMULATED :
+			case fwpdoPrepareMode::FWPDO_PREPARE_NATIVE :
+				$st = $this->pdo->prepare($sql);
+				$st -> execute ($this -> params);
+				break;
+			}
 			$arr = $st -> fetchAll(PDO::FETCH_ASSOC);
+			$this->nrows = $st -> rowCount();
 			$this -> success = true;
 		}
 		catch (PDOException $e)
@@ -1078,12 +1117,14 @@ return;
 	// select ('*', 'table', [ 'field' => 1 ]);
 
 	public function
-	select ()
+	select (): array|null
 	{
 		$num_args = func_num_args();
 
 		if ($num_args  == 0)
 			throw new fwpdoException('missing parameter');
+
+		$this -> params = [ ];
 
 		if ($num_args  == 1)	// new syntax
 		{
@@ -1102,7 +1143,7 @@ return;
 		}
 
 		if ($sql == '')
-			return '';
+			return null;
 
 		$this -> counters['SEL']++;
 
